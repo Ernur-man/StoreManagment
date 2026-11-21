@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { Check, CreditCard, Crown, Info, ShieldCheck, Sparkles } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { AlertTriangle, Check, CreditCard, Crown, Info, RotateCw, ShieldCheck, Sparkles } from 'lucide-react';
 import { Badge, Button, Card, EmptyState, Loading, PageHeader, SectionTitle, Table, TableWrap } from '../components/ui';
 import { AdminBilling } from '../components/AdminBilling';
 import { useI18n } from '../i18n';
@@ -63,6 +63,24 @@ export function Billing() {
     }
   }
 
+  /** DEMO renewal: reuse the signed ticket flow, then apply only a simulated result. */
+  async function simulateRenewal(outcome: 'success' | 'failure') {
+    setBusy(true);
+    try {
+      const checkout = await api.post<CheckoutResponse>('/billing/checkout', {});
+      const token = new URL(checkout.checkoutUrl).searchParams.get('token');
+      if (!token) throw new Error('billing.errors.invalidPayment');
+      await api.post('/billing/demo/confirm', { token, outcome });
+      if (outcome === 'success') toast.success(t('billing.demoSimSuccessBody'));
+      else toast.info(t('billing.demoSimFailureBody'));
+      await refresh();
+    } catch (err) {
+      toast.error(translateError((err as Error).message));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function cancel() {
     if (!window.confirm(t('billing.cancelConfirm'))) return;
     setBusy(true);
@@ -90,6 +108,13 @@ export function Billing() {
         title={t('billing.title')}
         subtitle={t('billing.subtitle')}
       />
+
+      {data.demo && (
+        <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{t('billing.demoBanner')}</span>
+        </div>
+      )}
 
       {(paymentResult === 'success' || demoResult === 'success') && (
         <div className="mb-5 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
@@ -157,6 +182,13 @@ export function Billing() {
                 {t('billing.subscribeNow')}
               </Button>
               <span className="text-xs text-indigo-200">{t('billing.renewNote')}</span>
+              <Link
+                to="/billing/payment-methods"
+                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-semibold text-white ring-1 ring-inset ring-white/25 transition hover:bg-white/20"
+              >
+                <CreditCard className="h-4 w-4" />
+                {t('billing.card.title')}
+              </Link>
             </div>
           </div>
         </Card>
@@ -180,7 +212,7 @@ export function Billing() {
                   <dd className="font-semibold text-slate-800">{formatDate(view.startedAt)}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3">
-                  <dt className="text-slate-500">{t('billing.nextPaymentDate')}</dt>
+                  <dt className="text-slate-500">{t('billing.nextConditionalRenewal')}</dt>
                   <dd className="font-semibold text-slate-800">{formatDate(view.nextPaymentAt)}</dd>
                 </div>
                 <div className="flex items-center justify-between gap-3">
@@ -217,8 +249,23 @@ export function Billing() {
         </div>
       </div>
 
+      {data.demo && (
+        <Card className="mt-5">
+          <SectionTitle title={t('billing.demoSimulationTitle')} subtitle={t('billing.demoSimulationSub')} />
+          <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 px-5 py-4">
+            <Button icon={<RotateCw className="h-4 w-4" />} onClick={() => void simulateRenewal('success')} disabled={busy}>
+              {t('billing.demoSimulateSuccess')}
+            </Button>
+            <Button variant="danger" icon={<RotateCw className="h-4 w-4" />} onClick={() => void simulateRenewal('failure')} disabled={busy}>
+              {t('billing.demoSimulateFailure')}
+            </Button>
+            <span className="text-xs text-slate-400">{t('billing.demoSimulationNote')}</span>
+          </div>
+        </Card>
+      )}
+
       <Card className="mt-5">
-        <SectionTitle title={t('billing.historyTitle')} subtitle={t('billing.historySub')} />
+        <SectionTitle title={t('billing.operationHistoryTitle')} subtitle={t('billing.operationHistorySub')} />
         <div className="border-t border-slate-100">
           {payments.length === 0 ? (
             <EmptyState icon={<CreditCard className="h-6 w-6" />} title={t('billing.noHistory')} description={t('billing.noHistorySub')} />
@@ -240,7 +287,12 @@ export function Billing() {
                         {t(paymentKeys[payment.status])}
                       </Badge>
                     </td>
-                    <td className="whitespace-nowrap px-4 py-3 text-slate-500">{payment.provider}</td>
+                    <td className="whitespace-nowrap px-4 py-3 text-slate-500">
+                      <span>{payment.provider}</span>
+                      {payment.demo && (
+                        <Badge className="ml-2 bg-amber-50 text-amber-700 ring-amber-200">{t('billing.demoBadgeShort')}</Badge>
+                      )}
+                    </td>
                     <td className="whitespace-nowrap px-4 py-3 font-semibold text-slate-800">{formatNumber(payment.amountKzt)} ₸</td>
                   </tr>
                 ))}

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, CreditCard, XCircle } from 'lucide-react';
 import { Badge, Button, Card } from '../components/ui';
 import { useI18n } from '../i18n';
 import { api } from '../lib/api';
-import type { SubscriptionPlan } from '../lib/types';
+import type { DemoCardResponse, SubscriptionPlan } from '../lib/types';
 import { toast } from '../store/toast';
 
 type Outcome = 'success' | 'failure' | 'cancel';
@@ -15,6 +15,7 @@ export function DemoCheckout() {
   const navigate = useNavigate();
   const { t, formatNumber, error: translateError } = useI18n();
   const [plan, setPlan] = useState<SubscriptionPlan | null>(null);
+  const [card, setCard] = useState<DemoCardResponse['card']>(null);
   const [busy, setBusy] = useState<Outcome | null>(null);
 
   useEffect(() => {
@@ -22,6 +23,10 @@ export function DemoCheckout() {
       .get<{ plan: SubscriptionPlan }>('/billing/plan')
       .then((data) => setPlan(data.plan))
       .catch(() => { /* the page below still explains the problem */ });
+    void api
+      .get<DemoCardResponse>('/billing/card')
+      .then((data) => setCard(data.card))
+      .catch(() => { /* the demo checkout stays usable without a card */ });
   }, []);
 
   async function confirm(outcome: Outcome) {
@@ -64,6 +69,15 @@ export function DemoCheckout() {
             <p className="text-xs text-slate-500">{t('billing.durationDays', { count: plan?.durationDays ?? 30 })}</p>
           </div>
           <p className="text-2xl font-black text-slate-900">{formatNumber(plan?.priceKzt ?? 7_990)} ₸</p>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-white px-4 py-3 text-xs ring-1 ring-slate-200">
+          <span className="font-semibold text-slate-600">
+            {card ? `${t('billing.card.badge')}: ${card.masked}` : t('billing.card.noCard')}
+          </span>
+          <Link to="/billing/payment-methods" className="font-semibold text-indigo-600 hover:underline">
+            {t('billing.card.title')}
+          </Link>
         </div>
 
         {!token && (

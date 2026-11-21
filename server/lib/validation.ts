@@ -117,6 +117,17 @@ export const demoConfirmSchema = z.object({
   outcome: z.enum(['success', 'failure', 'cancel']),
 });
 
+/**
+ * DEMO CARD. Errors use stable translation keys and never echo the submitted
+ * value, so a card number or CVV cannot leak into an error response.
+ */
+export const demoCardSchema = z.object({
+  number: z.string().trim().min(12, 'billing.card.errors.invalidNumber').max(23, 'billing.card.errors.invalidNumber'),
+  holderName: z.string().trim().min(2, 'billing.card.errors.invalidHolder').max(60, 'billing.card.errors.invalidHolder'),
+  expiry: z.string().trim().min(4, 'billing.card.errors.invalidExpiry').max(7, 'billing.card.errors.invalidExpiry'),
+  cvv: z.string().trim().min(3, 'billing.card.errors.invalidCvv').max(4, 'billing.card.errors.invalidCvv'),
+});
+
 export const adminSubscriptionStatusSchema = z.object({
   status: z.enum(SUBSCRIPTION_STATUSES),
   expiresAt: z.coerce.date().optional().nullable(),

@@ -28,7 +28,7 @@ Do not run `npm run db:seed` against a database that contains data you need to k
 | `DIRECT_URL` | Direct Prisma CLI URL | Used by `npm run db:migrate` |
 | `JWT_SECRET` | JWT signing secret | Long random value; never use the example value |
 | `APP_URL` | Public app origin | `http://localhost:3000` locally; HTTPS Vercel domain in production |
-| `PAYMENT_PROVIDER` | `demo` locally, `stripe` in production | Demo is hard-disabled when `NODE_ENV=production` |
+| `PAYMENT_PROVIDER` | `demo` locally, `stripe` for a real integration | Demo works in production only as an explicitly labelled simulation; keep `demo` if no real provider is configured |
 | `PAYMENT_DEMO_WEBHOOK_SECRET` | HMAC secret for demo webhooks | Development/preview only |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe credentials | Required only for `PAYMENT_PROVIDER=stripe` |
 | `CLIENT_ORIGIN` | Optional CORS allowlist | Only needed for external credentialed API clients |
@@ -76,11 +76,11 @@ npm run smoke
 npm run smoke:billing
 ```
 
-The smoke scripts mutate data and rely on demo payments, so run them only against a throwaway database/app. They are not suitable for production; demo endpoints are disabled there.
+The smoke scripts mutate data and rely on demo payments, so run them only against a throwaway database/app. Demo endpoints are only active with `PAYMENT_PROVIDER=demo` and remain labelled test operations in every environment.
 
 ## Differences from production
 
 - `APP_URL` is `http://localhost:3000`; production must use the Vercel HTTPS domain.
-- `PAYMENT_PROVIDER=demo` is allowed locally and on preview deployments; production uses Stripe and verified signed webhooks.
+- `PAYMENT_PROVIDER=demo` is also allowed in production as a clearly marked test mode: activation, renewals, failures and cancellations are signed/server-verified simulations and never move money. Use `stripe` only with a real merchant account and verified webhooks.
 - The login limiter is in-memory in both environments, so it is per instance when scaled on Vercel.
 - `npm start` serves the built Next.js app locally; Vercel uses the same build output. There is no Express server, Vite proxy, separate API port or `dist/` directory.

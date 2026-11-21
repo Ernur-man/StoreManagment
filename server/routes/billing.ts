@@ -1,7 +1,7 @@
 import { Router } from '../lib/router.js';
 import { requireAuth } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
-import { checkoutSchema, demoConfirmSchema } from '../lib/validation.js';
+import { checkoutSchema, demoCardSchema, demoConfirmSchema } from '../lib/validation.js';
 import {
   PaymentConfigurationError,
   PaymentProviderError,
@@ -17,12 +17,27 @@ import {
   startCheckout,
   subscriptionResponse,
 } from '../services/billing.js';
+import {
+  DemoCardValidationError,
+  deleteDemoCard,
+  getDemoCard,
+  saveDemoCard,
+} from '../services/demoCard.js';
 import { adminBillingRouter } from './billingAdmin.js';
 
 const router = new Router();
 router.use(requireAuth);
 
 import type { HttpResponse } from '../lib/router.js';
+
+function respondWithDemoCardError(res: HttpResponse, error: unknown): boolean {
+  if (error instanceof DemoCardValidationError) {
+    // The key is fixed server-side; the submitted PAN and CVV are never echoed.
+    res.status(400).json({ error: 'INVALID_DEMO_CARD', message: error.messageKey });
+    return true;
+  }
+  return false;
+}
 
 function respondWithPaymentError(res: HttpResponse, error: unknown): boolean {
   if (error instanceof PaymentConfigurationError) {
@@ -70,6 +85,36 @@ router.get(
   }),
 );
 
+// DEMO CARD VAULT. All handlers use the authenticated store/user identity, so
+// ownership is enforced on the server and no client-supplied id is trusted.
+router.get(
+  '/card',
+  asyncRoute(async (req, res) => {
+    res.json({ card: await getDemoCard(req.authUser!), demo: true });
+  }),
+);
+
+router.post(
+  '/card',
+  asyncRoute(async (req, res) => {
+    const input = demoCardSchema.parse(req.body ?? {});
+    try {
+      const card = await saveDemoCard(req.authUser!, input);
+      res.json({ card, demo: true });
+    } catch (error) {
+      if (!respondWithDemoCardError(res, error)) throw error;
+    }
+  }),
+);
+
+router.delete(
+  '/card',
+  asyncRoute(async (req, res) => {
+    await deleteDemoCard(req.authUser!);
+    res.json({ card: null, demo: true });
+  }),
+);
+
 router.post(
   '/checkout',
   asyncRoute(async (req, res) => {
@@ -95,7 +140,7 @@ router.post(
   }),
 );
 
-/** Local demo checkout only. In production this route is hard-disabled. */
+/** Signed demo checkout only; explicitly a test, never a real transaction. */
 router.post(
   '/demo/confirm',
   asyncRoute(async (req, res) => {

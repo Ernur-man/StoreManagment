@@ -76,7 +76,9 @@ Normalization trims, lowercases, applies NFKC and removes spaces, dashes, unders
 
 ## Payments and webhooks
 
-Checkout is server-created. The client never submits a payment result. Webhook routes receive the exact raw body; demo HMAC and Stripe signatures are verified before JSON parsing. `applyPaymentEvent()` is a Prisma transaction keyed by `(provider, eventId)`, with transaction status/amount/currency guards. Cancellation keeps access until `expiresAt`; failure produces `past_due` without revoking a paid period. Demo payments are hard-disabled in production.
+Checkout is server-created. The client never submits a payment result. Webhook routes receive the exact raw body; demo HMAC and Stripe signatures are verified before JSON parsing. `applyPaymentEvent()` is a Prisma transaction keyed by `(provider, eventId)`, with transaction status/amount/currency guards. Cancellation keeps access until `expiresAt`; failure produces `past_due` without revoking a paid period.
+
+Demo mode is selected with `PAYMENT_PROVIDER=demo` and remains an explicitly labelled test mode in production: no bank is contacted and no money moves. The DEMO card vault stores only brand, last4, holder name and expiry; the PAN and CVV are validated in memory and discarded. Card endpoints are authenticated and scoped to the session's store/user, and the API never returns a full number or CVV. Enabling `stripe` disables the demo flow so a simulation cannot be mistaken for a real transaction.
 
 ## Internationalization
 

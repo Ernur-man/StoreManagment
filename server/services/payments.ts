@@ -2,11 +2,13 @@
  * Provider-agnostic payment integration layer.
  *
  * Only two adapters exist:
- *  - `demo`   — local development only, never enabled in production.
+ *  - `demo`   — an explicitly labelled local simulation, available even in
+ *               production when PAYMENT_PROVIDER=demo. It never moves money.
  *  - `stripe` — Checkout Sessions over the REST API with signed webhooks.
  *
  * No card number, CVV or other sensitive card data is ever received, parsed or
- * stored here. Checkout happens entirely on the provider's domain.
+ * stored here. Demo card validation lives in services/demoCard.ts and persists
+ * metadata only.
  */
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import jwt from 'jsonwebtoken';
@@ -117,9 +119,14 @@ export function configuredProvider(): PaymentProviderName {
   return PAYMENT_PROVIDERS.includes(value as PaymentProviderName) ? (value as PaymentProviderName) : 'demo';
 }
 
-/** Demo checkouts and demo webhooks are hard-disabled in production builds. */
+/**
+ * The demo flow is enabled when the configured provider is the built-in demo
+ * adapter, including in production. It is always presented as a test with no
+ * real charge. When a real provider is configured the demo flow is switched off
+ * so a simulation can never be mistaken for a live transaction.
+ */
 export function isDemoAllowed(): boolean {
-  return process.env.NODE_ENV !== 'production';
+  return configuredProvider() === 'demo';
 }
 
 export function demoWebhookSecret(): string {
@@ -193,7 +200,7 @@ export async function createCheckout(
 
 function createDemoCheckout(input: CheckoutInput, request?: AppOriginRequest): CheckoutResult {
   if (!isDemoAllowed()) {
-    throw new PaymentConfigurationError('Demo payments are disabled in production');
+    throw new PaymentConfigurationError('Demo checkout is not enabled for the configured provider');
   }
   const base = resolveAppOrigin(request);
   if (!base) throw new PaymentConfigurationError('APP_URL is not configured');
@@ -288,7 +295,7 @@ export function normalizeWebhook(
   };
 
   if (provider === 'demo') {
-    if (!isDemoAllowed()) throw new PaymentVerificationError('Demo webhooks are disabled in production');
+    if (!isDemoAllowed()) throw new PaymentVerificationError('Demo webhooks are not enabled for the configured provider');
     if (!verifySignature(demoWebhookSecret(), rawBody, header('x-wishstock-signature'))) {
       throw new PaymentVerificationError('Invalid demo webhook signature');
     }

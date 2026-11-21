@@ -10,6 +10,7 @@ import { prisma } from '../lib/prisma.js';
 import {
   PaymentConfigurationError,
   PaymentVerificationError,
+  configuredProvider,
   createCheckout,
   resolveAppOrigin,
   type AppOriginRequest,
@@ -51,6 +52,9 @@ export async function subscriptionResponse(user: AuthUser) {
     : [];
   const plan = subscription?.plan ?? (await getPlan());
   return {
+    // Everything returned here is a labelled demo simulation when the demo
+    // adapter is configured; no value in this response is a bank confirmation.
+    demo: configuredProvider() === 'demo',
     // The database stores features as JSON; the UI needs the parsed array.
     plan: { ...plan, features: JSON.parse(plan.features) as string[] },
     subscription: subscription
@@ -69,7 +73,7 @@ export async function subscriptionResponse(user: AuthUser) {
         }
       : null,
     view: subscriptionView(subscription),
-    payments,
+    payments: payments.map((payment) => ({ ...payment, demo: payment.provider === 'demo' })),
   };
 }
 

@@ -238,6 +238,33 @@ export interface SubscriptionPayment {
   failureReason?: string | null;
   createdAt: string;
   completedAt?: string | null;
+  /** True for test operations; these are never bank charges. */
+  demo: boolean;
+}
+
+/** Safe demo metadata only — the PAN and CVV never reach the client. */
+export interface DemoCard {
+  id: string;
+  brand: string;
+  last4: string;
+  holderName: string;
+  expiryMonth: number;
+  expiryYear: number;
+  masked: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DemoCardInput {
+  number: string;
+  holderName: string;
+  expiry: string;
+  cvv: string;
+}
+
+export interface DemoCardResponse {
+  card: DemoCard | null;
+  demo: true;
 }
 
 export interface Subscription {
@@ -255,6 +282,7 @@ export interface Subscription {
 }
 
 export interface BillingResponse {
+  demo: boolean;
   plan: SubscriptionPlan;
   subscription: Subscription | null;
   view: {

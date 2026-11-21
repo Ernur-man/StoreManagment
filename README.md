@@ -71,11 +71,12 @@ The script reads every table with Node's built-in `node:sqlite` and writes throu
 
 There is exactly one plan: **WishStock Pro — 7,990 ₸ / month**, with **30 days of access** per payment. There are no other tiers, no free trial and no automatic renewal; subscribers renew manually from the billing page.
 
-- **Subscription page (`/billing`)** — plan name, `7,990 ₸ / month`, included features, current status, start date, next payment date and expiration date, **Subscribe Now** and **Manage Subscription** with cancellation. Login, account settings and billing are never Pro-gated.
+- **Subscription page (`/billing`)** — plan name, `7,990 ₸ / month`, included features, current status, start date, next conditional renewal date (DEMO) and expiration date, **Subscribe Now**, **Payment Methods**, DEMO renewal simulation and **Manage Subscription** with cancellation. Login, account settings and billing are never Pro-gated.
 - **Statuses** — `inactive`, `pending`, `active`, `past_due`, `cancelled`, `expired`. Access is granted only while a paid period is running (`active`) or after cancellation until the stored expiration date. Expiry is derived from timestamps on every request, so no scheduler is needed.
 - **Backend enforcement** — `requireProAccess` protects products, requests, arrivals, customers, dashboard and notifications APIs. The frontend `RequirePro` layout mirrors this only for navigation; it is never the security boundary.
-- **Payments** — checkout is created on the server. The client never sends a status, amount or payment result, and no card number or CVV is received or stored. Real activation happens only after a **signed webhook** from the configured provider.
-- **Demo mode** — development/preview only. Demo checkout can simulate success, failure or cancellation for acceptance testing. It is hard-disabled when `NODE_ENV=production` (the default on Vercel), so a demo confirmation can never represent a real charge.
+- **Payments** — checkout is created on the server. The client never sends a status, amount or payment result. Card data is handled only in the DEMO vault: a test PAN/CVV is validated in memory and discarded, while the database stores only brand, last4, holder name and expiry. Real activation happens only after a **signed webhook** from the configured provider.
+- **Demo mode** — available whenever `PAYMENT_PROVIDER=demo`, including production, and always labelled as a test. Demo checkout can simulate success, failure and cancellation for acceptance testing; no bank is contacted and no money is charged. With `PAYMENT_PROVIDER=stripe` the demo flow is disabled.
+- **Payment Methods (`/billing/payment-methods`)** — attach, replace or remove a test Visa/Mastercard. Only a masked `DEMO CARD` (for example `Visa •••• 4242`) is ever shown or stored.
 - **Admin management** — visible only to `billing:admin` (the `ADMIN` role). Shows subscriber counts, monthly revenue, subscription history and per-record payment history. Admins can repair a status or grant 30 days manually; every change is written to the audit log.
 
 ### Webhooks
@@ -129,7 +130,7 @@ Set these in Vercel Project Settings → Environment Variables (or in a local `.
 | `DIRECT_URL` | Direct (non-pooler) PostgreSQL URL used by Prisma migrations |
 | `JWT_SECRET` | Long random value; signs session JWTs and demo checkout tickets |
 | `APP_URL` | Public HTTPS origin, used for provider redirect URLs (not localhost in production) |
-| `PAYMENT_PROVIDER` | `stripe` in production; `demo` only outside production |
+| `PAYMENT_PROVIDER` | `demo` for the labelled test mode (also in production); `stripe` only with a real merchant account |
 | `PAYMENT_DEMO_WEBHOOK_SECRET` | HMAC secret for locally signed demo webhooks (development/preview only) |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Required when `PAYMENT_PROVIDER=stripe` |
 | `CLIENT_ORIGIN` | Optional comma-separated CORS allowlist for credentialed external API clients |
@@ -178,7 +179,7 @@ Unit tests, type checks and the production build pass locally. Database-backed a
 - Vercel functions run in UTC. Date-bucket logic was left unchanged rather than silently shifted.
 - Payments: no Kaspi or other Kazakhstan local-provider integration; Stripe business-country restrictions apply.
 - No verified auto-renew. Renewal is a manual 30-day purchase; failed/abandoned payments never grant access and never revoke an already-paid period.
-- Demo payments are disabled in production. Real activation requires a provider-signed webhook with the correct amount and currency.
+- Demo activation/renewals are server-verified test operations, explicitly marked as DEMO in the UI and history; they never represent bank transactions. Real activation requires a provider-signed webhook with the correct amount and currency.
 - Expiry is evaluated from timestamps on each request; no background worker or renewal reminder emails are included.
 - All names, phones, emails and addresses in seed data are fictional.
 

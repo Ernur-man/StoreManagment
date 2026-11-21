@@ -39,6 +39,7 @@ model Store {
 
   subscriptions       Subscription[]
   paymentTransactions PaymentTransaction[]
+  demoCards           DemoCard[]
 }
 
 model User {
@@ -63,6 +64,7 @@ model User {
 
   subscriptions       Subscription[]
   paymentTransactions PaymentTransaction[]
+  demoCards           DemoCard[]
 
   @@index([storeId, role])
 }
@@ -298,6 +300,27 @@ model AuditLog {
 // Statuses are stored as lowercase strings and mirrored in server/lib/constants.ts:
 // inactive | pending | active | past_due | cancelled | expired
 // ---------------------------------------------------------------------------
+
+/// DEMO CARD VAULT. Metadata only: no PAN, CVV or magnetic-stripe data is ever
+/// stored. A user has at most one demo card; replacing it overwrites the record.
+model DemoCard {
+  id          String   @id @default(uuid())
+  storeId     String
+  userId      String
+  brand       String // Visa | Mastercard — display metadata, not a processor token
+  last4       String
+  holderName  String
+  expiryMonth Int
+  expiryYear  Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, userId])
+  @@index([userId])
+}
 
 model SubscriptionPlan {
   id           String   @id @default(uuid())

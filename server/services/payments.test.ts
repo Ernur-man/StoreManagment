@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PaymentVerificationError,
   createCheckout,
+  isDemoAllowed,
   normalizeWebhook,
   resolveAppOrigin,
   signPayload,
@@ -106,6 +107,20 @@ describe('webhook normalization', () => {
 
     const unknown = JSON.stringify({ id: 'evt_other', type: 'payment_intent.created', data: { object: {} } });
     expect(normalizeWebhook('stripe', unknown, { 'stripe-signature': `t=${timestamp},v1=${sign(unknown)}` })).toBeNull();
+  });
+});
+
+describe('demo availability', () => {
+  it('allows the labelled demo flow in production when PAYMENT_PROVIDER=demo', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('PAYMENT_PROVIDER', 'demo');
+    expect(isDemoAllowed()).toBe(true);
+  });
+
+  it('disables the demo flow when a real provider is configured', () => {
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('PAYMENT_PROVIDER', 'stripe');
+    expect(isDemoAllowed()).toBe(false);
   });
 });
 
