@@ -1,0 +1,390 @@
+// WishStock data model.
+// PostgreSQL is the single production database (Vercel Marketplace / Neon).
+// DATABASE_URL is the pooled runtime URL; DIRECT_URL is used by Prisma CLI for
+// migrations. The original SQLite history is preserved in prisma/sqlite-migrations/
+// and prisma/dev.sqlite.backup for the one-time data migration.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model Store {
+  id                String              @id @default(uuid())
+  name              String
+  code              String              @unique
+  currency          String              @default("USD")
+  address           String?
+  phone             String?
+  email             String?
+  lowStockThreshold Int                 @default(3)
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  users         User[]
+  products      Product[]
+  variants      ProductVariant[]
+  inventory     Inventory[]
+  customers     Customer[]
+  requests      CustomerRequest[]
+  arrivals      StockArrival[]
+  notifications Notification[]
+  sales         Sale[]
+  auditLogs     AuditLog[]
+
+  subscriptions       Subscription[]
+  paymentTransactions PaymentTransaction[]
+}
+
+model User {
+  id           String    @id @default(uuid())
+  storeId      String
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         String    @default("EMPLOYEE") // ADMIN | MANAGER | EMPLOYEE
+  active       Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLoginAt  DateTime?
+
+  store           Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  requests        CustomerRequest[] @relation("RequestEmployee")
+  contacts        CustomerRequest[] @relation("ContactEmployee")
+  arrivals        StockArrival[]
+  sales           Sale[]
+  auditLogs       AuditLog[]
+  notifications   Notification[]
+
+  subscriptions       Subscription[]
+  paymentTransactions PaymentTransaction[]
+
+  @@index([storeId, role])
+}
+
+model Product {
+  id          String   @id @default(uuid())
+  storeId     String
+  name        String
+  sku         String
+  category    String
+  brand       String?
+  description String?
+  imageUrl    String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store    Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  variants ProductVariant[]
+  requests CustomerRequest[]
+
+  @@unique([storeId, sku])
+  @@index([storeId, category])
+  @@index([storeId, name])
+}
+
+model ProductVariant {
+  id                String   @id @default(uuid())
+  storeId           String
+  productId         String
+  sku               String
+  size              String
+  color             String
+  price             Float    @default(0)
+  imageUrl          String?
+  lowStockThreshold Int      @default(3)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  store        Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  product      Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  inventory    Inventory?
+  arrivalItems StockArrivalItem[]
+  requests     CustomerRequest[]
+  sales        Sale[]
+
+  @@unique([storeId, sku])
+  @@index([productId])
+  @@index([storeId, size, color])
+}
+
+model Inventory {
+  id        String   @id @default(uuid())
+  storeId   String
+  variantId String   @unique
+  quantity  Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  store   Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, quantity])
+}
+
+model Customer {
+  id        String   @id @default(uuid())
+  storeId   String
+  name      String
+  phone     String
+  email     String?
+  notes     String?
+  status    String   @default("ACTIVE") // ACTIVE | VIP | INACTIVE
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  store    Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  requests CustomerRequest[]
+  sales    Sale[]
+
+  @@unique([storeId, phone])
+  @@index([storeId, name])
+}
+
+model CustomerRequest {
+  id               String    @id @default(uuid())
+  storeId          String
+  requestNumber    String
+  customerId       String
+  productId        String?
+  variantId        String?
+  productName      String
+  sku              String
+  category         String?
+  size             String
+  color            String
+  source           String    @default("IN_STORE")
+  notes            String?
+  status           String    @default("WAITING")
+  requestDate      DateTime  @default(now())
+  employeeId       String?
+  availableAt      DateTime?
+  contactedAt      DateTime?
+  contactEmployeeId String?
+  completedAt      DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  store          Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer       Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  product        Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant        ProductVariant?  @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  employee       User?            @relation("RequestEmployee", fields: [employeeId], references: [id], onDelete: SetNull)
+  contactEmployee User?           @relation("ContactEmployee", fields: [contactEmployeeId], references: [id], onDelete: SetNull)
+  matches        ArrivalMatch[]
+  sale           Sale?
+
+  @@unique([storeId, requestNumber])
+  @@index([storeId, status])
+  @@index([storeId, sku])
+  @@index([storeId, requestDate])
+  @@index([storeId, customerId])
+}
+
+model StockArrival {
+  id            String   @id @default(uuid())
+  storeId       String
+  arrivalNumber String
+  supplier      String?
+  notes         String?
+  arrivalDate   DateTime @default(now())
+  employeeId    String?
+  createdAt     DateTime @default(now())
+
+  store    Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  employee User?              @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  items    StockArrivalItem[]
+
+  @@unique([storeId, arrivalNumber])
+  @@index([storeId, arrivalDate])
+}
+
+model StockArrivalItem {
+  id          String   @id @default(uuid())
+  arrivalId   String
+  variantId   String
+  productName String
+  sku         String
+  size        String
+  color       String
+  quantity    Int
+  unitCost    Float?
+  createdAt   DateTime @default(now())
+
+  arrival StockArrival   @relation(fields: [arrivalId], references: [id], onDelete: Cascade)
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  matches ArrivalMatch[]
+
+  @@index([arrivalId])
+}
+
+model ArrivalMatch {
+  id            String   @id @default(uuid())
+  arrivalItemId String
+  requestId     String
+  createdAt     DateTime @default(now())
+
+  arrivalItem StockArrivalItem @relation(fields: [arrivalItemId], references: [id], onDelete: Cascade)
+  request      CustomerRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  // A request can only ever be matched once — the core anti-duplication guard.
+  @@unique([requestId])
+  @@unique([arrivalItemId, requestId])
+}
+
+model Notification {
+  id         String   @id @default(uuid())
+  storeId    String
+  userId     String?
+  type       String   @default("STOCK_MATCH") // STOCK_MATCH | SYSTEM
+  title      String
+  body       String
+  entityType String?
+  entityId   String?
+  read       Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, read, createdAt])
+}
+
+model Sale {
+  id         String   @id @default(uuid())
+  storeId    String
+  variantId  String
+  customerId String
+  requestId  String?  @unique
+  employeeId String?
+  quantity   Int      @default(1)
+  amount     Float
+  soldAt     DateTime @default(now())
+  createdAt  DateTime @default(now())
+
+  store    Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  variant  ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  customer Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  request  CustomerRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
+  employee User?          @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, soldAt])
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  storeId    String
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  details    String?
+  createdAt  DateTime @default(now())
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([storeId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Subscriptions & billing
+// Only one plan is seeded and exposed: WishStock Pro (7,990 KZT / 30 days).
+// Statuses are stored as lowercase strings and mirrored in server/lib/constants.ts:
+// inactive | pending | active | past_due | cancelled | expired
+// ---------------------------------------------------------------------------
+
+model SubscriptionPlan {
+  id           String   @id @default(uuid())
+  code         String   @unique
+  name         String
+  description  String?
+  priceKzt     Int
+  currency     String   @default("KZT")
+  billingCycle String   @default("MONTH")
+  durationDays Int      @default(30)
+  features     String // JSON-encoded string[] of human-readable feature labels
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  subscriptions       Subscription[]
+  paymentTransactions PaymentTransaction[]
+}
+
+model Subscription {
+  id                     String    @id @default(uuid())
+  storeId                String
+  userId                 String
+  planId                 String
+  status                 String    @default("inactive")
+  provider               String?
+  providerSubscriptionId String?
+  startedAt              DateTime?
+  expiresAt              DateTime?
+  nextPaymentAt          DateTime?
+  cancelledAt            DateTime?
+  lastPaymentAt          DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
+
+  store               Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                SubscriptionPlan    @relation(fields: [planId], references: [id], onDelete: Restrict)
+  paymentTransactions PaymentTransaction[]
+
+  // One subscription per user and plan. The store is part of the key so a user
+  // can never hold two conflicting Pro records for the same workspace.
+  @@unique([storeId, userId, planId])
+  @@index([storeId, status])
+  @@index([expiresAt])
+}
+
+model PaymentTransaction {
+  id                String    @id @default(uuid())
+  storeId           String
+  subscriptionId    String
+  planId            String
+  userId            String
+  provider          String
+  providerPaymentId String?   @unique
+  idempotencyKey    String    @unique
+  amountKzt         Int
+  currency          String    @default("KZT")
+  status            String    @default("pending") // pending | succeeded | failed | cancelled
+  failureReason     String?
+  checkoutUrl       String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  completedAt       DateTime?
+
+  store        Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  subscription Subscription         @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  plan         SubscriptionPlan    @relation(fields: [planId], references: [id], onDelete: Restrict)
+  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  events       PaymentEvent[]
+
+  @@index([storeId, createdAt])
+  @@index([status])
+  @@index([userId, createdAt])
+}
+
+model PaymentEvent {
+  id            String   @id @default(uuid())
+  provider      String
+  eventId       String
+  transactionId String?
+  type          String
+  processedAt   DateTime @default(now())
+
+  transaction PaymentTransaction? @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  // The unique key is the anti-duplication guard: a provider event is applied once.
+  @@unique([provider, eventId])
+  @@index([processedAt])
+}

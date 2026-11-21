@@ -1,0 +1,38 @@
+node_modules/
+dist/
+.next/
+out/
+.vercel/
+
+# Environment files (the committed example is the only exception)
+*.local
+.env
+.env.*
+!.env.example
+
+# Local databases and dumps
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.backup
+*.dump
+*.sql.gz
+
+# Private keys and credential files
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+id_rsa*
+id_ed25519*
+credentials*.json
+service-account*.json
+
+.DS_Store
+*.log
