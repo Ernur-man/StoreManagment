@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { ClipboardList, Eye, Pencil, Phone, Plus, Trash2, Download, FileSpreadsheet, Link2 } from 'lucide-react';
 import { api } from '../lib/api';
 import { useI18n } from '../i18n';
@@ -9,7 +9,8 @@ import { RequestStatusBadge } from '../components/Badges';
 import { ContactActions } from '../components/ContactActions';
 import { exportCsv, exportExcel, isoDate, phoneHref, whatsappHref } from '../lib/utils';
 import { toast } from '../store/toast';
-import { REQUEST_SOURCES, REQUEST_STATUSES } from '../lib/shared';
+import { useAuthStore } from '../store/auth';
+import { can, REQUEST_SOURCES, REQUEST_STATUSES } from '../lib/shared';
 import type { CustomerRequest } from '../lib/types';
 import type { TranslationKey } from '../i18n/translations';
 
@@ -32,8 +33,12 @@ const emptyForm = (): RequestForm => ({
 
 export function Requests() {
   const { t, td, formatDate, error: translateError } = useI18n();
+  const currentUser = useAuthStore((state) => state.user);
+  const canWrite = can(currentUser?.role, 'requests:write');
+  const canDelete = can(currentUser?.role, 'requests:delete');
   const [requests, setRequests] = useState<CustomerRequest[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('ALL');
   const [from, setFrom] = useState('');
@@ -57,8 +62,11 @@ export function Requests() {
       params.set('sort', sort);
       const data = await api.get<{ requests: CustomerRequest[] }>(`/requests?${params}`);
       setRequests(data.requests);
+      setLoadError(null);
     } catch (err) {
-      toast.error(translateError((err as Error).message));
+      const message = translateError((err as Error).message);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -69,18 +77,18 @@ export function Requests() {
     return () => window.clearTimeout(timer);
   }, [load]);
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return requests.filter((r) => !q || [r.requestNumber, r.productName, r.sku, r.customer.name, r.customer.phone].some((v) => v.toLowerCase().includes(q)));
-  }, [requests, search]);
-
   function openForm(request?: CustomerRequest) {
+    if (!canWrite) {
+      toast.error(t('auth.errors.forbidden'));
+      return;
+    }
+    setViewing(null);
     if (request) {
       setEditing(request);
       setForm({
         customerName: request.customer.name, phone: request.customer.phone, productName: request.productName,
         sku: request.sku, category: request.category ?? '', size: request.size, color: request.color,
-        source: request.source, requestDate: isoDate(request.requestDate), notes: request.notes ?? '',
+        source: request.source, requestDate: request.requestDate ? isoDate(request.requestDate) : isoDate(new Date()), notes: request.notes ?? '',
       });
     } else {
       setEditing(null);
@@ -97,7 +105,7 @@ export function Requests() {
         ...form,
         category: form.category || null,
         notes: form.notes || null,
-        requestDate: new Date(`${form.requestDate}T12:00:00`).toISOString(),
+        requestDate: form.requestDate ? new Date(`${form.requestDate}T12:00:00`).toISOString() : new Date().toISOString(),
       };
       if (editing) await api.patch(`/requests/${editing.id}`, payload);
       else await api.post('/requests', payload);
@@ -113,6 +121,10 @@ export function Requests() {
 
   async function remove() {
     if (!deleting) return;
+    if (!canDelete) {
+      toast.error(t('auth.errors.forbidden'));
+      return;
+    }
     try {
       await api.delete(`/requests/${deleting.id}`);
       toast.success(t('common.deleted'));
@@ -142,7 +154,7 @@ export function Requests() {
       { key: 'status' as const, label: t('common.status') },
       { key: 'employee' as const, label: t('common.employee') },
     ];
-    const rows = filtered.map((r) => ({
+    const rows = requests.map((r) => ({
       requestNumber: r.requestNumber,
       productName: td(r.productName),
       sku: r.sku,
@@ -157,7 +169,7 @@ export function Requests() {
     const filename = `WishStock_requests_${isoDate(new Date())}`;
     if (kind === 'csv') exportCsv(rows, columns, filename);
     else exportExcel(rows, columns, filename);
-    toast.success(t('common.saved'));
+    toast.success(t('common.exportStarted'));
   }
 
   return (
@@ -166,8 +178,17 @@ export function Requests() {
         eyebrow={t('nav.requests')}
         title={t('requests.title')}
         subtitle={t('requests.subtitle')}
-        actions={<Button variant="primary" onClick={() => openForm()} icon={<Plus className="h-4 w-4" />}>{t('requests.newRequest')}</Button>}
+        actions={canWrite ? <Button variant="primary" onClick={() => openForm()} icon={<Plus className="h-4 w-4" />}>{t('requests.newRequest')}</Button> : undefined}
       />
+
+      {loadError && !loading && (
+        <Card className="mb-5 border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>{t('common.loadError')} {loadError}</span>
+            <Button size="sm" onClick={() => void load()}>{t('common.retry')}</Button>
+          </div>
+        </Card>
+      )}
 
       <Card className="mb-5 p-3">
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
@@ -185,7 +206,7 @@ export function Requests() {
           </Select>
         </div>
         <div className="mt-2 flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-slate-400">
-          <span>{filtered.length} {t('common.total').toLowerCase()}</span>
+          <span>{requests.length} {t('common.total').toLowerCase()}</span>
           <div className="flex gap-2">
             <button type="button" onClick={() => exportData('csv')} className="inline-flex items-center gap-1 font-semibold text-indigo-600 hover:text-indigo-800"><Download className="h-3.5 w-3.5" />{t('common.exportCsv')}</button>
             <button type="button" onClick={() => exportData('xls')} className="inline-flex items-center gap-1 font-semibold text-indigo-600 hover:text-indigo-800"><FileSpreadsheet className="h-3.5 w-3.5" />{t('common.exportExcel')}</button>
@@ -194,7 +215,7 @@ export function Requests() {
       </Card>
 
       <Card className="overflow-hidden">
-        {loading ? <div className="py-16 text-center text-sm text-slate-500">{t('common.loading')}</div> : filtered.length === 0 ? (
+        {loading ? <div className="py-16 text-center text-sm text-slate-500">{t('common.loading')}</div> : requests.length === 0 ? (
           <EmptyState icon={<ClipboardList className="h-5 w-5" />} title={t('requests.noRequests')} description={t('requests.noRequestsSub')} />
         ) : (
           <TableWrap>
@@ -203,7 +224,7 @@ export function Requests() {
               t('requests.customerName'), t('requests.customerPhone'), t('requests.requestDate'),
               t('common.status'), t('common.employee'), t('common.actions'),
             ]}>
-              {filtered.map((request) => (
+              {requests.map((request) => (
                 <tr key={request.id} className="hover:bg-slate-50/60">
                   <td className="whitespace-nowrap px-4 py-3 font-mono text-[11px] text-slate-500">{request.requestNumber}</td>
                   <td className="px-4 py-3"><p className="whitespace-nowrap font-semibold text-slate-800">{td(request.productName)}</p></td>
@@ -220,8 +241,8 @@ export function Requests() {
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
                       <button type="button" title={t('requests.viewRequest')} className="rounded-lg p-1.5 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600" onClick={() => setViewing(request)}><Eye className="h-4 w-4" /></button>
-                      <button type="button" title={t('common.edit')} className="rounded-lg p-1.5 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600" onClick={() => openForm(request)}><Pencil className="h-4 w-4" /></button>
-                      <button type="button" title={t('common.delete')} className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600" onClick={() => setDeleting(request)}><Trash2 className="h-4 w-4" /></button>
+                      {canWrite && <button type="button" title={t('common.edit')} className="rounded-lg p-1.5 text-slate-400 hover:bg-indigo-50 hover:text-indigo-600" onClick={() => openForm(request)}><Pencil className="h-4 w-4" /></button>}
+                      {canDelete && <button type="button" title={t('common.delete')} className="rounded-lg p-1.5 text-slate-400 hover:bg-red-50 hover:text-red-600" onClick={() => { setViewing(null); setDeleting(request); }}><Trash2 className="h-4 w-4" /></button>}
                     </div>
                   </td>
                 </tr>
@@ -234,9 +255,9 @@ export function Requests() {
       <Modal open={formOpen} onClose={() => setFormOpen(false)} title={editing ? t('requests.editRequest') : t('requests.newRequest')} subtitle={t('requests.subtitle')} wide
         footer={<>
           <Button onClick={() => setFormOpen(false)}>{t('common.cancel')}</Button>
-          <Button variant="primary" onClick={save} disabled={saving}>{saving ? t('common.loading') : t('common.save')}</Button>
+          <Button type="submit" form="request-form" variant="primary" disabled={saving}>{saving ? t('common.loading') : t('common.save')}</Button>
         </>}>
-        <form onSubmit={save} className="space-y-4">
+        <form id="request-form" onSubmit={save} className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label={`${t('requests.customerName')} *`}><Input required value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} /></Field>
             <Field label={`${t('requests.customerPhone')} *`} hint={t('customers.phoneHint')}><Input required type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
@@ -246,8 +267,8 @@ export function Requests() {
             <Field label={`${t('common.size')} *`}><Input required value={form.size} onChange={(e) => setForm({ ...form, size: e.target.value })} /></Field>
             <Field label={`${t('common.color')} *`}><Input required value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} /></Field>
             <Field label={t('requests.requestSource')}><Select value={form.source} onChange={(e) => setForm({ ...form, source: e.target.value })}>{REQUEST_SOURCES.map((s) => <option key={s} value={s}>{t(`source.${s}`)}</option>)}</Select></Field>
-            <Field label={t('requests.requestDate')}><Input type="date" value={form.requestDate} onChange={(e) => setForm({ ...form, requestDate: e.target.value })} /></Field>
-            <Field label={t('requests.additionalNotes')} className="sm:col-span-2"><Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder={t('requests.additionalNotes')} /></Field>
+            <Field label={t('requests.requestDate')}><Input required type="date" value={form.requestDate} onChange={(e) => setForm({ ...form, requestDate: e.target.value })} /></Field>
+            <Field label={t('requests.additionalNotes')} className="sm:col-span-2"><Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder={t('requests.additionalNotesPlaceholder')} /></Field>
           </div>
           <div className="rounded-xl bg-indigo-50/70 px-4 py-3 text-xs leading-relaxed text-indigo-900">{t('requests.formHint')}<br />{t('requests.matchHint')}</div>
           <button type="submit" className="hidden" />
@@ -256,8 +277,8 @@ export function Requests() {
 
       <Modal open={Boolean(viewing)} onClose={() => setViewing(null)} title={t('requests.viewRequest')} subtitle={viewing?.requestNumber} wide
         footer={<>
-          <Button variant="danger" onClick={() => { if (viewing) setDeleting(viewing); }} icon={<Trash2 className="h-4 w-4" />}>{t('common.delete')}</Button>
-          <Button onClick={() => { if (viewing) openForm(viewing); }} icon={<Pencil className="h-4 w-4" />}>{t('common.edit')}</Button>
+          {canDelete && <Button variant="danger" onClick={() => { if (viewing) { setViewing(null); setDeleting(viewing); } }} icon={<Trash2 className="h-4 w-4" />}>{t('common.delete')}</Button>}
+          {canWrite && <Button onClick={() => { if (viewing) openForm(viewing); }} icon={<Pencil className="h-4 w-4" />}>{t('common.edit')}</Button>}
         </>}>
         {viewing && (
           <div className="space-y-5">

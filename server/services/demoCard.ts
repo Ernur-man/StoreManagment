@@ -47,6 +47,14 @@ const fail = (key: string): never => {
   throw new DemoCardValidationError(key);
 };
 
+/** Published, non-real test numbers only. Real PANs are never accepted. */
+const DEMO_TEST_PANS = new Set([
+  '4242424242424242',
+  '4000000000000002',
+  '5555555555554444',
+  '2221000000000009',
+]);
+
 /** Removes the only formatting accepted in the demo form: spaces and dashes. */
 export function normalizeCardNumber(value: string): string {
   return value.replace(/[\s-]/g, '');
@@ -101,7 +109,7 @@ export function parseCardExpiry(value: string, now: Date = new Date()): Pick<Dem
  */
 export function parseDemoCard(input: DemoCardInput): DemoCardMetadata {
   const number = normalizeCardNumber(input.number);
-  if (!/^\d+$/.test(number) || !detectCardBrand(number) || !luhnValid(number)) {
+  if (!DEMO_TEST_PANS.has(number) || !detectCardBrand(number) || !luhnValid(number)) {
     return fail('billing.card.errors.invalidNumber');
   }
 

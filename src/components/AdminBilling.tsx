@@ -26,13 +26,17 @@ export function AdminBilling() {
   const [newStatus, setNewStatus] = useState<SubscriptionStatus>('active');
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const data = await api.get<BillingAdminOverview>('/billing/admin/overview');
       setOverview(data);
+      setLoadError(null);
     } catch (err) {
-      toast.error(translateError((err as Error).message));
+      const message = translateError((err as Error).message);
+      setLoadError(message);
+      toast.error(message);
     }
   }, [translateError]);
 
@@ -42,6 +46,7 @@ export function AdminBilling() {
 
   async function inspect(subscription: BillingAdminSubscription) {
     setSelected(subscription);
+    setDetail(null);
     setNewStatus(subscription.status);
     try {
       const data = await api.get<{ subscription: BillingAdminSubscription }>(`/billing/admin/subscriptions/${subscription.id}`);
@@ -91,7 +96,7 @@ export function AdminBilling() {
         { label: t('billing.admin.activeSubscriptions'), value: formatNumber(stats.active), icon: Crown, tone: 'text-emerald-600 bg-emerald-50' },
         { label: t('billing.admin.expiredSubscriptions'), value: formatNumber(stats.expired), icon: ShieldCheck, tone: 'text-red-600 bg-red-50' },
         { label: t('billing.admin.pendingPayments'), value: formatNumber(stats.pending), icon: RefreshCw, tone: 'text-amber-600 bg-amber-50' },
-        { label: t('billing.admin.monthlyRevenue'), value: `${formatNumber(stats.monthlyRevenueKzt)} ₸`, icon: Crown, tone: 'text-violet-600 bg-violet-50' },
+        { label: overview.demo ? t('billing.admin.monthlyRevenueDemo') : t('billing.admin.monthlyRevenue'), value: `${formatNumber(stats.monthlyRevenueKzt)} ₸`, icon: Crown, tone: 'text-violet-600 bg-violet-50' },
       ]
     : [];
 
@@ -108,10 +113,25 @@ export function AdminBilling() {
         }
       />
 
+      {loadError && !overview && (
+        <Card className="mb-4 border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>{t('common.loadError')} {loadError}</span>
+            <Button size="sm" onClick={() => void load()}>{t('common.retry')}</Button>
+          </div>
+        </Card>
+      )}
+
       {!overview ? (
         <Card><p className="p-6 text-sm text-slate-500">{t('common.loading')}</p></Card>
       ) : (
         <>
+          {overview.demo && (
+            <div className="mb-4 flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <Badge className="bg-amber-100 text-amber-800 ring-amber-200">{t('billing.demoBadgeShort')}</Badge>
+              <span>{t('billing.admin.demoNote')}</span>
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             {cards.map((card) => {
               const Icon = card.icon;
@@ -217,7 +237,10 @@ export function AdminBilling() {
                   {detail.paymentTransactions?.map((payment) => (
                     <div key={payment.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2 text-xs">
                       <span className="text-slate-600">{formatDate(payment.createdAt, true)}</span>
-                      <span className="text-slate-500">{payment.provider}</span>
+                      <span className="text-slate-500">
+                        {payment.provider}
+                        {payment.demo && <Badge className="ml-2 bg-amber-50 text-amber-700 ring-amber-200">{t('billing.demoBadgeShort')}</Badge>}
+                      </span>
                       <span className="font-semibold text-slate-800">{formatNumber(payment.amountKzt)} ₸</span>
                     </div>
                   ))}

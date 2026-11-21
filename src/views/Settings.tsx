@@ -32,7 +32,9 @@ const roles: Role[] = ['ADMIN', 'MANAGER', 'EMPLOYEE'];
 export function Settings() {
   const { t, language, setLanguage, formatDate, error: translateError } = useI18n();
   const currentUser = useAuthStore((state) => state.user);
-  const canManage = currentUser?.role === 'ADMIN' || currentUser?.role === 'MANAGER';
+  const isAdmin = currentUser?.role === 'ADMIN';
+  const canManage = isAdmin || currentUser?.role === 'MANAGER';
+  const selectableRoles = isAdmin ? roles : roles.filter((role) => role !== 'ADMIN');
   const [store, setStore] = useState<StoreSettings | null>(null);
   const [storeForm, setStoreForm] = useState<StoreForm | null>(null);
   const [users, setUsers] = useState<AuthUser[]>([]);
@@ -96,6 +98,10 @@ export function Settings() {
   }
 
   function openUserForm(user?: AuthUser) {
+    if (!isAdmin && user?.role === 'ADMIN') {
+      toast.error(t('settings.errors.adminOnly'));
+      return;
+    }
     setEditingUser(user ?? null);
     setUserForm(user ? {
       name: user.name, email: user.email, password: '', role: user.role, active: user.active,
@@ -105,6 +111,14 @@ export function Settings() {
 
   async function saveUser(event: FormEvent) {
     event.preventDefault();
+    if (!isAdmin && (userForm.role === 'ADMIN' || editingUser?.role === 'ADMIN')) {
+      toast.error(t('settings.errors.adminOnly'));
+      return;
+    }
+    if (!isAdmin && editingUser && editingUser.id !== currentUser?.id && userForm.password) {
+      toast.error(t('settings.errors.adminOnly'));
+      return;
+    }
     setSavingUser(true);
     try {
       if (editingUser) {
@@ -128,6 +142,11 @@ export function Settings() {
 
   async function removeUser() {
     if (!deletingUser) return;
+    if (!isAdmin && deletingUser.role === 'ADMIN') {
+      toast.error(t('settings.errors.adminOnly'));
+      setDeletingUser(null);
+      return;
+    }
     try {
       await api.delete(`/settings/users/${deletingUser.id}`);
       toast.success(t('common.deleted'));
@@ -229,8 +248,8 @@ export function Settings() {
                 {canManage && (
                   <td className="px-4 py-3">
                     <div className="flex items-center gap-1">
-                      <Button size="sm" variant="ghost" icon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openUserForm(user)}>{t('common.edit')}</Button>
-                      <Button size="sm" variant="ghost" icon={<Trash2 className="h-3.5 w-3.5" />} onClick={() => setDeletingUser(user)} disabled={user.id === currentUser?.id}>{t('common.delete')}</Button>
+                      <Button size="sm" variant="ghost" icon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openUserForm(user)} disabled={!isAdmin && user.role === 'ADMIN'}>{t('common.edit')}</Button>
+                      <Button size="sm" variant="ghost" icon={<Trash2 className="h-3.5 w-3.5" />} onClick={() => setDeletingUser(user)} disabled={user.id === currentUser?.id || (!isAdmin && user.role === 'ADMIN')}>{t('common.delete')}</Button>
                     </div>
                   </td>
                 )}
@@ -280,11 +299,21 @@ export function Settings() {
           </Field>
           <Field label={t('settings.role')}>
             <Select value={userForm.role} onChange={(e) => setUserForm({ ...userForm, role: e.target.value as Role })}>
-              {roles.map((role) => <option key={role} value={role}>{t(`role.${role}`)}</option>)}
+              {selectableRoles.map((role) => <option key={role} value={role}>{t(`role.${role}`)}</option>)}
             </Select>
           </Field>
           <Field label={editingUser ? t('settings.newPassword') : t('settings.password')} className="sm:col-span-2">
-            <Input type="password" minLength={8} required={!editingUser} value={userForm.password} onChange={(e) => setUserForm({ ...userForm, password: e.target.value })} />
+            <Input
+              type="password"
+              minLength={8}
+              required={!editingUser}
+              disabled={Boolean(editingUser && !isAdmin && editingUser.id !== currentUser?.id)}
+              value={userForm.password}
+              onChange={(e) => setUserForm({ ...userForm, password: e.target.value })}
+            />
+            {editingUser && !isAdmin && editingUser.id !== currentUser?.id && (
+              <p className="mt-1 text-xs text-slate-500">{t('settings.errors.adminOnlyNote')}</p>
+            )}
           </Field>
           <label className="flex items-center gap-2 sm:col-span-2">
             <input type="checkbox" checked={userForm.active} onChange={(e) => setUserForm({ ...userForm, active: e.target.checked })} className="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />

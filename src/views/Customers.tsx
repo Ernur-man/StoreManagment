@@ -7,7 +7,9 @@ import {
 } from '../components/ui';
 import { CustomerStatusBadge, RequestStatusBadge } from '../components/Badges';
 import { phoneHref, whatsappHref } from '../lib/utils';
+import { can } from '../lib/shared';
 import { toast } from '../store/toast';
+import { useAuthStore } from '../store/auth';
 import type { Customer, CustomerRequest, Sale } from '../lib/types';
 
 interface CustomerForm {
@@ -23,8 +25,11 @@ const customerStatuses = ['ACTIVE', 'VIP', 'INACTIVE'] as const;
 
 export function Customers() {
   const { t, td, formatDate: formatI18nDate, formatMoney: formatI18nMoney, error: translateError } = useI18n();
+  const currentUser = useAuthStore((state) => state.user);
+  const canWrite = can(currentUser?.role, 'customers:write');
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
@@ -37,8 +42,11 @@ export function Customers() {
     try {
       const data = await api.get<{ customers: Customer[] }>('/customers');
       setCustomers(data.customers);
+      setLoadError(null);
     } catch (err) {
-      toast.error(translateError((err as Error).message));
+      const message = translateError((err as Error).message);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -55,6 +63,11 @@ export function Customers() {
   }, [customers, search]);
 
   function openForm(customer?: Customer) {
+    if (!canWrite) {
+      toast.error(t('auth.errors.forbidden'));
+      return;
+    }
+    setViewing(null);
     setEditing(customer ?? null);
     setForm(customer ? {
       name: customer.name,
@@ -94,8 +107,17 @@ export function Customers() {
         eyebrow={t('nav.customers')}
         title={t('customers.title')}
         subtitle={t('customers.subtitle')}
-        actions={<Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => openForm()}>{t('customers.addCustomer')}</Button>}
+        actions={canWrite ? <Button variant="primary" icon={<Plus className="h-4 w-4" />} onClick={() => openForm()}>{t('customers.addCustomer')}</Button> : undefined}
       />
+
+      {loadError && !loading && (
+        <Card className="mb-4 border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>{t('common.loadError')} {loadError}</span>
+            <Button size="sm" onClick={() => void load()}>{t('common.retry')}</Button>
+          </div>
+        </Card>
+      )}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="relative min-w-[240px] flex-1 sm:max-w-sm">
@@ -148,7 +170,7 @@ export function Customers() {
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-1">
                     <Button size="sm" variant="ghost" icon={<Eye className="h-3.5 w-3.5" />} onClick={() => setViewing(customer)}>{t('common.view')}</Button>
-                    <Button size="sm" variant="ghost" icon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openForm(customer)}>{t('common.edit')}</Button>
+                    {canWrite && <Button size="sm" variant="ghost" icon={<Pencil className="h-3.5 w-3.5" />} onClick={() => openForm(customer)}>{t('common.edit')}</Button>}
                   </div>
                 </td>
               </tr>

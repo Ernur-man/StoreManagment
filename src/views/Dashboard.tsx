@@ -36,13 +36,17 @@ export function Dashboard() {
   const user = useAuthStore((state) => state.user);
   const [data, setData] = useState<DashboardData | null>(null);
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
     try {
       setData(await api.get<DashboardData>('/dashboard'));
+      setLoadError(null);
     } catch (err) {
-      toast.error(translateError((err as Error).message));
+      const message = translateError((err as Error).message);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setBusy(false);
     }
@@ -57,9 +61,18 @@ export function Dashboard() {
       recentlyAvailable: current.recentlyAvailable.filter((r) => r.id !== updated.id),
       recentRequests: current.recentRequests.map((r) => (r.id === updated.id ? updated : r)),
     } : current);
+    // Status changes affect every dashboard statistic, not just the contact list.
+    void load();
   }
 
-  if (!data) return <div className="py-16 text-center text-sm text-slate-500">{t('common.loading')}</div>;
+  if (!data) {
+    return loadError ? (
+      <Card className="mx-auto mt-10 max-w-lg p-6 text-center">
+        <p className="text-sm text-red-700">{t('common.loadError')} {loadError}</p>
+        <Button className="mt-4" onClick={() => void load()} disabled={busy}>{t('common.retry')}</Button>
+      </Card>
+    ) : <div className="py-16 text-center text-sm text-slate-500">{t('common.loading')}</div>;
+  }
   const stats = data.stats;
 
   const cards = [
@@ -244,8 +257,8 @@ export function Dashboard() {
         <h3 className="font-bold text-slate-800">{t('dashboard.flowTitle')}</h3>
         <p className="mt-1 text-sm text-slate-600">{t('dashboard.flowSub')}</p>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Link to="/requests"><Button variant="primary" size="sm">{t('requests.newRequest')}</Button></Link>
-          <Link to="/arrivals"><Button size="sm">{t('arrivals.newArrival')}</Button></Link>
+          <Link to="/requests" className="inline-flex min-h-9 items-center justify-center rounded-xl bg-indigo-600 px-3 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-300">{t('requests.newRequest')}</Link>
+          <Link to="/arrivals" className="inline-flex min-h-9 items-center justify-center rounded-xl bg-white px-3 text-xs font-semibold text-slate-700 ring-1 ring-inset ring-slate-200 transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-indigo-200">{t('arrivals.newArrival')}</Link>
         </div>
       </div>
     </div>

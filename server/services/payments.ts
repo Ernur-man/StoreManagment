@@ -58,8 +58,17 @@ export class PaymentConfigurationError extends PaymentError {}
 export class PaymentProviderError extends PaymentError {}
 export class PaymentVerificationError extends PaymentError {}
 
-const JWT_SECRET = process.env.JWT_SECRET || 'wishstock-insecure-development-secret';
+const DEV_JWT_SECRET = 'wishstock-insecure-development-secret';
 const STRIPE_API = 'https://api.stripe.com/v1';
+
+function jwtSecret(): string {
+  const configured = process.env.JWT_SECRET;
+  if (configured?.trim()) return configured;
+  if (process.env.NODE_ENV === 'production') {
+    throw new PaymentConfigurationError('JWT_SECRET is required in production');
+  }
+  return DEV_JWT_SECRET;
+}
 
 /** Only the request URL is needed to recover the active local origin. */
 export interface AppOriginRequest {
@@ -130,7 +139,12 @@ export function isDemoAllowed(): boolean {
 }
 
 export function demoWebhookSecret(): string {
-  return process.env.PAYMENT_DEMO_WEBHOOK_SECRET || JWT_SECRET;
+  const configured = process.env.PAYMENT_DEMO_WEBHOOK_SECRET;
+  if (configured?.trim()) return configured;
+  if (process.env.NODE_ENV === 'production') {
+    throw new PaymentConfigurationError('PAYMENT_DEMO_WEBHOOK_SECRET is required in production');
+  }
+  return jwtSecret();
 }
 
 export function signPayload(secret: string, payload: string): string {
@@ -170,12 +184,12 @@ export function verifyStripeSignature(
 }
 
 export function createDemoTicket(ticket: DemoTicket): string {
-  return jwt.sign({ ...ticket, purpose: 'wishstock-demo-checkout' }, JWT_SECRET, { expiresIn: '15m' });
+  return jwt.sign({ ...ticket, purpose: 'wishstock-demo-checkout' }, jwtSecret(), { expiresIn: '15m' });
 }
 
 export function verifyDemoTicket(token: string): DemoTicket | null {
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as jwt.JwtPayload & Partial<DemoTicket>;
+    const payload = jwt.verify(token, jwtSecret()) as jwt.JwtPayload & Partial<DemoTicket>;
     if (payload.purpose !== 'wishstock-demo-checkout') return null;
     if (!payload.transactionId || !payload.providerPaymentId || !payload.idempotencyKey || !payload.amountKzt) return null;
     return {
@@ -194,6 +208,11 @@ export async function createCheckout(
   input: CheckoutInput,
   request?: AppOriginRequest,
 ): Promise<CheckoutResult> {
+  // Only the server-configured provider may ever be used. A client must not be
+  // able to switch a demo deployment to a real checkout integration.
+  if (provider !== configuredProvider()) {
+    throw new PaymentConfigurationError('The requested payment provider is not enabled for this deployment');
+  }
   if (provider === 'demo') return createDemoCheckout(input, request);
   return createStripeCheckout(input, request);
 }
@@ -314,6 +333,8 @@ export function normalizeWebhook(
       transactionId,
       providerPaymentId,
       reason: envelope.data?.reason ?? undefined,
+      amountMinor: envelope.data?.amountMinor,
+      currency: envelope.data?.currency,
     };
   }
 

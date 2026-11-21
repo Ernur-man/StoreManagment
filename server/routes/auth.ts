@@ -30,6 +30,18 @@ router.post(
       return;
     }
     await prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } });
+    const sessionUser = await prisma.user.findUniqueOrThrow({
+      where: { id: user.id },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        active: true,
+        lastLoginAt: true,
+        store: { select: { id: true, name: true, code: true, currency: true } },
+      },
+    });
     const token = issueToken({
       id: user.id,
       storeId: user.storeId,
@@ -38,10 +50,7 @@ router.post(
       role: user.role as 'ADMIN' | 'MANAGER' | 'EMPLOYEE',
     });
     setSessionCookie(res, token);
-    res.json({
-      user: { id: user.id, name: user.name, email: user.email, role: user.role },
-      token,
-    });
+    res.json({ user: sessionUser });
   }),
 );
 

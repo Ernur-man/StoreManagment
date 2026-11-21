@@ -12,10 +12,19 @@ interface Bucket {
 
 const buckets = new Map<string, Bucket>();
 
+function headerValue(req: HttpRequest, name: string): string | undefined {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
 function clientKey(req: HttpRequest): string {
-  const forwarded = req.headers['x-forwarded-for'];
-  const value = Array.isArray(forwarded) ? forwarded[0] : forwarded;
-  return value?.split(',')[0]?.trim() || req.headers['x-real-ip']?.toString() || 'unknown';
+  // Vercel overwrites x-vercel-forwarded-for with the original client IP.
+  // For x-forwarded-for, the platform appends the trusted hop, so the last
+  // value is safer than a client-controlled first value.
+  const vercelForwarded = headerValue(req, 'x-vercel-forwarded-for')?.split(',')[0]?.trim();
+  if (vercelForwarded) return vercelForwarded;
+  const forwarded = headerValue(req, 'x-forwarded-for')?.split(',').map((item) => item.trim()).filter(Boolean);
+  return forwarded?.at(-1) || headerValue(req, 'x-real-ip')?.trim() || 'unknown';
 }
 
 /**

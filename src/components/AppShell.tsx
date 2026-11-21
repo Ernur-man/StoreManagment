@@ -74,11 +74,21 @@ export function AppShell() {
     }
   }
 
+  function notificationTarget(notification: AppNotification | undefined): string {
+    switch (notification?.entityType) {
+      case 'PRODUCT_VARIANT': return '/inventory';
+      case 'STOCK_ARRIVAL': return '/arrivals';
+      case 'CUSTOMER_REQUEST': return '/requests';
+      default: return notification?.type === 'SYSTEM' ? '/settings' : '/requests';
+    }
+  }
+
   async function markRead(id: string) {
+    const notification = notifications.find((item) => item.id === id);
     try {
       await api.patch(`/notifications/${id}/read`);
       setNotifications((items) => items.map((n) => (n.id === id ? { ...n, read: true } : n)));
-      navigate('/requests');
+      navigate(notificationTarget(notification));
     } catch (err) {
       toast.error(translateError((err as Error).message));
     }

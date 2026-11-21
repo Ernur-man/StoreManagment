@@ -70,7 +70,12 @@ router.post(
       return;
     }
     const customer = await prisma.customer.create({
-      data: { ...data, storeId: user.storeId, email: data.email || null },
+      data: {
+        ...data,
+        phone: normalizePhone(data.phone),
+        storeId: user.storeId,
+        email: data.email || null,
+      },
     });
     await writeAudit(prisma, user, 'CUSTOMER_CREATED', 'CUSTOMER', customer.id);
     res.status(201).json({ customer });
@@ -85,7 +90,7 @@ router.patch(
     const user = req.authUser!;
     const customer = await prisma.customer.updateMany({
       where: { id: req.params.id, storeId: user.storeId },
-      data: { ...data, email: data.email || null },
+      data: { ...data, phone: normalizePhone(data.phone), email: data.email || null },
     });
     if (customer.count === 0) {
       res.status(404).json({ message: 'errors.notFound' });

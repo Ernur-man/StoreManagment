@@ -313,6 +313,8 @@ export interface BillingAdminSubscription extends Subscription {
 }
 
 export interface BillingAdminOverview {
+  /** True when the deployment is explicitly configured for the labelled demo flow. */
+  demo: boolean;
   stats: {
     totalSubscribers: number;
     active: number;

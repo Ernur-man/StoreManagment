@@ -7,7 +7,9 @@ import {
 } from '../components/ui';
 import { AvailabilityBadge } from '../components/Badges';
 import { availabilityFor, cn } from '../lib/utils';
+import { can } from '../lib/shared';
 import { toast } from '../store/toast';
+import { useAuthStore } from '../store/auth';
 import type { Product, Variant } from '../lib/types';
 
 interface VariantForm {
@@ -37,9 +39,13 @@ interface Meta { categories: string[]; sizes: string[]; colors: string[]; brands
 
 export function Inventory() {
   const { t, td, formatDate, formatMoney, error: translateError } = useI18n();
+  const currentUser = useAuthStore((state) => state.user);
+  const canWrite = can(currentUser?.role, 'products:write');
+  const canDelete = can(currentUser?.role, 'products:delete');
   const [products, setProducts] = useState<Product[]>([]);
   const [meta, setMeta] = useState<Meta>({ categories: [], sizes: [], colors: [], brands: [] });
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [category, setCategory] = useState('ALL');
   const [size, setSize] = useState('ALL');
@@ -64,8 +70,11 @@ export function Inventory() {
       ]);
       setProducts(productsData.products);
       setMeta(metaData);
+      setLoadError(null);
     } catch (err) {
-      toast.error(translateError((err as Error).message));
+      const message = translateError((err as Error).message);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -93,6 +102,11 @@ export function Inventory() {
   }, [products, search, category, size, color, availability, sort]);
 
   function openForm(product?: Product) {
+    if (!canWrite) {
+      toast.error(t('auth.errors.forbidden'));
+      return;
+    }
+    setViewing(null);
     if (product) {
       setEditing(product);
       setForm({
@@ -139,6 +153,10 @@ export function Inventory() {
 
   async function remove() {
     if (!deleting) return;
+    if (!canDelete) {
+      toast.error(t('auth.errors.forbidden'));
+      return;
+    }
     try {
       await api.delete(`/products/${deleting.id}`);
       toast.success(t('common.deleted'));
@@ -152,6 +170,10 @@ export function Inventory() {
 
   async function saveAdjustment() {
     if (!adjusting) return;
+    if (!canWrite) {
+      toast.error(t('auth.errors.forbidden'));
+      return;
+    }
     try {
       await api.patch(`/products/variants/${adjusting.id}/inventory`, { quantity: Number(adjustValue) });
       toast.success(t('common.saved'));
@@ -170,8 +192,17 @@ export function Inventory() {
         eyebrow={t('nav.inventory')}
         title={t('inventory.title')}
         subtitle={t('inventory.subtitle')}
-        actions={<Button variant="primary" onClick={() => openForm()} icon={<Plus className="h-4 w-4" />}>{t('inventory.addProduct')}</Button>}
+        actions={canWrite ? <Button variant="primary" onClick={() => openForm()} icon={<Plus className="h-4 w-4" />}>{t('inventory.addProduct')}</Button> : undefined}
       />
+
+      {loadError && !loading && (
+        <Card className="mb-5 border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>{t('common.loadError')} {loadError}</span>
+            <Button size="sm" onClick={() => void load()}>{t('common.retry')}</Button>
+          </div>
+        </Card>
+      )}
 
       <Card className="mb-5 p-3">
         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-6">
@@ -196,7 +227,7 @@ export function Inventory() {
       </Card>
 
       {loading ? <div className="py-16 text-center text-sm text-slate-500">{t('common.loading')}</div> : filtered.length === 0 ? (
-        <Card><EmptyState icon={<Boxes className="h-5 w-5" />} title={t('inventory.noProducts')} description={t('inventory.noProductsSub')} action={<Button variant="primary" onClick={() => openForm()}>{t('inventory.addProduct')}</Button>} /></Card>
+        <Card><EmptyState icon={<Boxes className="h-5 w-5" />} title={t('inventory.noProducts')} description={t('inventory.noProductsSub')} action={canWrite ? <Button variant="primary" onClick={() => openForm()}>{t('inventory.addProduct')}</Button> : undefined} /></Card>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
           {filtered.map((product) => {
@@ -231,8 +262,8 @@ export function Inventory() {
                   </div>
                   <div className="flex gap-1">
                     <button type="button" title={t('common.view')} className="rounded-lg p-2 text-slate-400 hover:bg-white hover:text-indigo-600" onClick={() => setViewing(product)}><Eye className="h-4 w-4" /></button>
-                    <button type="button" title={t('common.edit')} className="rounded-lg p-2 text-slate-400 hover:bg-white hover:text-indigo-600" onClick={() => openForm(product)}><Pencil className="h-4 w-4" /></button>
-                    <button type="button" title={t('common.delete')} className="rounded-lg p-2 text-slate-400 hover:bg-white hover:text-red-600" onClick={() => setDeleting(product)}><Trash2 className="h-4 w-4" /></button>
+                    {canWrite && <button type="button" title={t('common.edit')} className="rounded-lg p-2 text-slate-400 hover:bg-white hover:text-indigo-600" onClick={() => openForm(product)}><Pencil className="h-4 w-4" /></button>}
+                    {canDelete && <button type="button" title={t('common.delete')} className="rounded-lg p-2 text-slate-400 hover:bg-white hover:text-red-600" onClick={() => { setViewing(null); setDeleting(product); }}><Trash2 className="h-4 w-4" /></button>}
                   </div>
                 </div>
               </Card>
@@ -250,10 +281,10 @@ export function Inventory() {
         wide
         footer={<>
           <Button onClick={() => setFormOpen(false)}>{t('common.cancel')}</Button>
-          <Button variant="primary" onClick={save} disabled={saving}>{saving ? t('common.loading') : t('common.save')}</Button>
+          <Button type="submit" form="product-form" variant="primary" disabled={saving}>{saving ? t('common.loading') : t('common.save')}</Button>
         </>}
       >
-        <form onSubmit={save} className="space-y-5">
+        <form id="product-form" onSubmit={save} className="space-y-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label={`${t('common.name')} *`}><Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} /></Field>
             <Field label={`${t('inventory.baseSku')} *`}><Input required value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} /></Field>
@@ -291,8 +322,8 @@ export function Inventory() {
 
       {/* View */}
       <Modal open={Boolean(viewing)} onClose={() => setViewing(null)} title={t('inventory.productDetails')} subtitle={viewing?.sku} wide footer={<>
-        <Button variant="danger" onClick={() => { setDeleting(viewing); }} icon={<Trash2 className="h-4 w-4" />}>{t('common.delete')}</Button>
-        <Button onClick={() => { if (viewing) openForm(viewing); }} icon={<Pencil className="h-4 w-4" />}>{t('common.edit')}</Button>
+        {canDelete && <Button variant="danger" onClick={() => { if (viewing) { setViewing(null); setDeleting(viewing); } }} icon={<Trash2 className="h-4 w-4" />}>{t('common.delete')}</Button>}
+        {canWrite && <Button onClick={() => { if (viewing) openForm(viewing); }} icon={<Pencil className="h-4 w-4" />}>{t('common.edit')}</Button>}
       </>}>
         {viewing && (
           <div className="space-y-5">
@@ -316,7 +347,7 @@ export function Inventory() {
                     <td className="px-4 py-3 text-slate-600">{formatMoney(v.price)}</td>
                     <td className="px-4 py-3 font-semibold text-slate-800">{v.quantity}</td>
                     <td className="px-4 py-3">{v.availability && <AvailabilityBadge status={v.availability} />}</td>
-                    <td className="px-4 py-3"><button type="button" className="text-xs font-semibold text-indigo-600 hover:underline" onClick={() => { setAdjusting(v); setAdjustValue(String(v.quantity ?? 0)); }}>{t('inventory.adjustStock')}</button></td>
+                    <td className="px-4 py-3">{canWrite && <button type="button" className="text-xs font-semibold text-indigo-600 hover:underline" onClick={() => { setViewing(null); setAdjusting(v); setAdjustValue(String(v.quantity ?? 0)); }}>{t('inventory.adjustStock')}</button>}</td>
                   </tr>
                 ))}
               </Table>

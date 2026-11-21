@@ -90,6 +90,10 @@ router.get(
 router.get(
   '/card',
   asyncRoute(async (req, res) => {
+    if (!isDemoAllowed()) {
+      res.status(403).json({ error: 'DEMO_DISABLED', message: 'billing.errors.demoDisabled' });
+      return;
+    }
     res.json({ card: await getDemoCard(req.authUser!), demo: true });
   }),
 );
@@ -97,6 +101,10 @@ router.get(
 router.post(
   '/card',
   asyncRoute(async (req, res) => {
+    if (!isDemoAllowed()) {
+      res.status(403).json({ error: 'DEMO_DISABLED', message: 'billing.errors.demoDisabled' });
+      return;
+    }
     const input = demoCardSchema.parse(req.body ?? {});
     try {
       const card = await saveDemoCard(req.authUser!, input);
@@ -110,6 +118,10 @@ router.post(
 router.delete(
   '/card',
   asyncRoute(async (req, res) => {
+    if (!isDemoAllowed()) {
+      res.status(403).json({ error: 'DEMO_DISABLED', message: 'billing.errors.demoDisabled' });
+      return;
+    }
     await deleteDemoCard(req.authUser!);
     res.json({ card: null, demo: true });
   }),
@@ -119,7 +131,11 @@ router.post(
   '/checkout',
   asyncRoute(async (req, res) => {
     const input = checkoutSchema.parse(req.body ?? {});
-    const selected = input.provider ?? configuredProvider();
+    const selected = configuredProvider();
+    if (input.provider && input.provider !== selected) {
+      res.status(403).json({ error: 'PROVIDER_DISABLED', message: 'billing.errors.providerMismatch' });
+      return;
+    }
     if (selected === 'demo' && !isDemoAllowed()) {
       res.status(403).json({ error: 'DEMO_DISABLED', message: 'billing.errors.demoDisabled' });
       return;

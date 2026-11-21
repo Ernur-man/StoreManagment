@@ -41,6 +41,7 @@ export function Billing() {
   const data = useBillingStore((state) => state.data);
   const ready = useBillingStore((state) => state.ready);
   const refresh = useBillingStore((state) => state.refresh);
+  const loadError = useBillingStore((state) => state.error);
   const user = useAuthStore((state) => state.user);
   const [params] = useSearchParams();
   const [busy, setBusy] = useState(false);
@@ -95,7 +96,14 @@ export function Billing() {
     }
   }
 
-  if (!ready || !data) return <Loading />;
+  if (!ready || !data) {
+    return loadError ? (
+      <Card className="mx-auto mt-10 max-w-lg p-6 text-center">
+        <p className="text-sm text-red-700">{t('common.loadError')} {translateError(loadError)}</p>
+        <Button className="mt-4" onClick={() => void refresh()}>{t('common.retry')}</Button>
+      </Card>
+    ) : <Loading />;
+  }
 
   const { plan, view, payments } = data;
   const status = view.status;
@@ -119,7 +127,7 @@ export function Billing() {
       {(paymentResult === 'success' || demoResult === 'success') && (
         <div className="mb-5 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
           <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{t('billing.paymentSuccess')}</span>
+          <span>{data.demo ? t('billing.paymentSuccess') : t('billing.paymentSuccessReal')}</span>
         </div>
       )}
       {(paymentResult === 'cancelled' || demoResult === 'cancel') && (
@@ -156,7 +164,7 @@ export function Billing() {
               <span className="text-4xl font-black tracking-tight sm:text-5xl">{formatNumber(plan.priceKzt)} ₸</span>
               <span className="mb-1.5 text-sm font-semibold text-indigo-200">/ {t('billing.month')}</span>
             </div>
-            <p className="mt-1 text-xs text-indigo-200">{t('billing.priceNote')}</p>
+            <p className="mt-1 text-xs text-indigo-200">{data.demo ? t('billing.priceNote') : t('billing.priceNoteReal')}</p>
 
             <div className="mt-7">
               <p className="mb-3 text-xs font-bold uppercase tracking-[0.16em] text-indigo-200">{t('billing.featuresTitle')}</p>
@@ -182,13 +190,15 @@ export function Billing() {
                 {t('billing.subscribeNow')}
               </Button>
               <span className="text-xs text-indigo-200">{t('billing.renewNote')}</span>
-              <Link
-                to="/billing/payment-methods"
-                className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-semibold text-white ring-1 ring-inset ring-white/25 transition hover:bg-white/20"
-              >
-                <CreditCard className="h-4 w-4" />
-                {t('billing.card.title')}
-              </Link>
+              {data.demo && (
+                <Link
+                  to="/billing/payment-methods"
+                  className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-semibold text-white ring-1 ring-inset ring-white/25 transition hover:bg-white/20"
+                >
+                  <CreditCard className="h-4 w-4" />
+                  {t('billing.card.title')}
+                </Link>
+              )}
             </div>
           </div>
         </Card>
@@ -265,7 +275,10 @@ export function Billing() {
       )}
 
       <Card className="mt-5">
-        <SectionTitle title={t('billing.operationHistoryTitle')} subtitle={t('billing.operationHistorySub')} />
+        <SectionTitle
+          title={data.demo ? t('billing.operationHistoryTitle') : t('billing.operationHistoryTitleReal')}
+          subtitle={data.demo ? t('billing.operationHistorySub') : t('billing.operationHistorySubReal')}
+        />
         <div className="border-t border-slate-100">
           {payments.length === 0 ? (
             <EmptyState icon={<CreditCard className="h-6 w-6" />} title={t('billing.noHistory')} description={t('billing.noHistorySub')} />

@@ -1,4 +1,3 @@
-import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { matchesVariant, normalize } from '../lib/normalize.js';
 import { generateNumber, writeAudit } from '../lib/audit.js';
@@ -58,23 +57,35 @@ export async function registerArrival(input: RegisterArrivalInput, user: AuthUse
       productSku = existing.sku;
     }
 
-    let variant = await tx.productVariant.findFirst({
-      where: {
-        storeId: user.storeId,
-        sku: input.sku,
-        size: input.size,
-        color: input.color,
-      },
+    const variants = await tx.productVariant.findMany({
+      where: { storeId: user.storeId },
+      select: { id: true, sku: true, size: true, color: true },
     });
+    let variant = variants.find(
+      (candidate) =>
+        normalize(candidate.sku) === normalize(input.sku) &&
+        normalize(candidate.size) === normalize(input.size) &&
+        normalize(candidate.color) === normalize(input.color),
+    );
     if (!variant) {
+      let variantSku = input.sku;
+      if (variants.some((candidate) => normalize(candidate.sku) === normalize(input.sku))) {
+        variantSku = `${input.sku}-${input.size}-${input.color}`.replace(/\s+/g, '-').toUpperCase();
+        let suffix = 2;
+        while (variants.some((candidate) => normalize(candidate.sku) === normalize(variantSku))) {
+          variantSku = `${input.sku}-${input.size}-${input.color}-${suffix}`.replace(/\s+/g, '-').toUpperCase();
+          suffix += 1;
+        }
+      }
       variant = await tx.productVariant.create({
         data: {
           storeId: user.storeId,
           productId,
-          sku: input.sku,
+          sku: variantSku,
           size: input.size,
           color: input.color,
-          price: input.unitCost ?? 0,
+          // unitCost is an arrival cost, never the retail price.
+          price: 0,
           lowStockThreshold: store.lowStockThreshold,
         },
       });
@@ -138,39 +149,46 @@ export async function registerArrival(input: RegisterArrivalInput, user: AuthUse
       phone: string;
     }> = [];
 
+    const eligible: typeof candidates = [];
     for (const request of candidates) {
       // Re-check inside the transaction so a concurrent arrival cannot match twice.
       const stillEligible = await tx.customerRequest.findFirst({
         where: { id: request.id, status: 'WAITING', matches: { none: {} } },
         select: { id: true },
       });
-      if (!stillEligible) continue;
+      if (stillEligible) eligible.push(request);
+    }
 
-      try {
-        await tx.arrivalMatch.create({
-          data: { arrivalItemId: item.id, requestId: request.id },
+    if (eligible.length > 0) {
+      // skipDuplicates is an ON CONFLICT DO NOTHING. Catching P2002 inside an
+      // interactive PostgreSQL transaction would abort the whole transaction.
+      await tx.arrivalMatch.createMany({
+        data: eligible.map((request) => ({ arrivalItemId: item.id, requestId: request.id })),
+        skipDuplicates: true,
+      });
+      const inserted = await tx.arrivalMatch.findMany({
+        where: { arrivalItemId: item.id, requestId: { in: eligible.map((request) => request.id) } },
+        select: { requestId: true },
+      });
+      const insertedIds = new Set(inserted.map((match) => match.requestId));
+      for (const request of eligible) {
+        if (!insertedIds.has(request.id)) continue;
+        await tx.customerRequest.update({
+          where: { id: request.id },
+          data: {
+            status: 'AVAILABLE',
+            availableAt: new Date(),
+            productId,
+            variantId: variant.id,
+          },
         });
-      } catch (error) {
-        // PostgreSQL can report the unique(requestId) race before the
-        // read check above sees it. The loser simply skips that request.
-        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') continue;
-        throw error;
+        matchedRequests.push({
+          id: request.id,
+          requestNumber: request.requestNumber,
+          customerName: request.customer.name,
+          phone: request.customer.phone,
+        });
       }
-      await tx.customerRequest.update({
-        where: { id: request.id },
-        data: {
-          status: 'AVAILABLE',
-          availableAt: new Date(),
-          productId,
-          variantId: variant.id,
-        },
-      });
-      matchedRequests.push({
-        id: request.id,
-        requestNumber: request.requestNumber,
-        customerName: request.customer.name,
-        phone: request.customer.phone,
-      });
     }
 
     if (matchedRequests.length > 0) {

@@ -1,8 +1,12 @@
 import { createHmac } from 'node:crypto';
+import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  PaymentConfigurationError,
   PaymentVerificationError,
+  configuredProvider,
   createCheckout,
+  demoWebhookSecret,
   isDemoAllowed,
   normalizeWebhook,
   resolveAppOrigin,
@@ -16,6 +20,7 @@ const secret = 'test-webhook-secret';
 const nowMs = Date.now();
 
 beforeEach(() => {
+  process.env.JWT_SECRET = 'test-jwt-secret';
   process.env.PAYMENT_DEMO_WEBHOOK_SECRET = secret;
   process.env.STRIPE_WEBHOOK_SECRET = secret;
 });
@@ -170,5 +175,87 @@ describe('checkout origin resolution', () => {
       idempotencyKey: 'idem_1',
       amountKzt: 7_990,
     });
+  });
+});
+
+describe('production payment configuration', () => {
+  it('normalizes provider names and falls back to demo for unknown values', () => {
+    vi.stubEnv('PAYMENT_PROVIDER', ' Stripe ');
+    expect(configuredProvider()).toBe('stripe');
+    vi.stubEnv('PAYMENT_PROVIDER', 'unknown');
+    expect(configuredProvider()).toBe('demo');
+  });
+
+  it('requires a dedicated demo webhook secret in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('PAYMENT_DEMO_WEBHOOK_SECRET', '');
+    expect(() => demoWebhookSecret()).toThrow(PaymentConfigurationError);
+    vi.stubEnv('PAYMENT_DEMO_WEBHOOK_SECRET', secret);
+    expect(demoWebhookSecret()).toBe(secret);
+  });
+
+  it('rejects a demo webhook when a real provider is configured', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('PAYMENT_PROVIDER', 'stripe');
+    const body = JSON.stringify({ id: 'evt_1', type: 'payment.succeeded', transactionId: 'tx_1' });
+    expect(() => normalizeWebhook('demo', body, { 'x-wishstock-signature': signPayload(secret, body) }))
+      .toThrow(PaymentVerificationError);
+  });
+
+  it('does not allow a client to start demo checkout when Stripe is configured', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('PAYMENT_PROVIDER', 'stripe');
+    vi.stubEnv('APP_URL', 'https://wishstock.example');
+    await expect(createCheckout(
+      'demo',
+      { transactionId: 'tx_1', idempotencyKey: 'idem_1', amountKzt: 7_990, storeId: 'store_1', userId: 'user_1' },
+      { url: 'https://wishstock.example/api/billing/checkout' },
+    )).rejects.toBeInstanceOf(PaymentConfigurationError);
+  });
+});
+
+describe('demo ticket verification', () => {
+  const ticket = {
+    transactionId: 'tx_1',
+    providerPaymentId: 'demo_1',
+    idempotencyKey: 'idem_1',
+    amountKzt: 7_990,
+  };
+
+  it('accepts a signed ticket with the expected purpose', () => {
+    const token = jwt.sign({ ...ticket, purpose: 'wishstock-demo-checkout' }, 'test-jwt-secret');
+    expect(verifyDemoTicket(token)).toEqual(ticket);
+  });
+
+  it('rejects an expired ticket', () => {
+    const token = jwt.sign(
+      { ...ticket, purpose: 'wishstock-demo-checkout', exp: Math.floor(Date.now() / 1000) - 60 },
+      'test-jwt-secret',
+    );
+    expect(verifyDemoTicket(token)).toBeNull();
+  });
+
+  it('rejects a ticket with a different purpose', () => {
+    const token = jwt.sign({ ...ticket, purpose: 'some-other-flow' }, 'test-jwt-secret');
+    expect(verifyDemoTicket(token)).toBeNull();
+  });
+
+  it('rejects a tampered ticket', () => {
+    const token = jwt.sign({ ...ticket, purpose: 'wishstock-demo-checkout' }, 'test-jwt-secret');
+    const tampered = `${token.slice(0, -2)}${token.slice(-2) === 'aa' ? 'bb' : 'aa'}`;
+    expect(verifyDemoTicket(tampered)).toBeNull();
+  });
+});
+
+describe('demo webhook normalization', () => {
+  it('forwards provider amount and currency for the demo adapter', () => {
+    const body = JSON.stringify({
+      id: 'demo_evt_amount',
+      type: 'payment.succeeded',
+      transactionId: 'tx_1',
+      data: { amountMinor: 799000, currency: 'kzt' },
+    });
+    const event = normalizeWebhook('demo', body, { 'x-wishstock-signature': signPayload(secret, body) });
+    expect(event).toMatchObject({ provider: 'demo', amountMinor: 799000, currency: 'kzt' });
   });
 });

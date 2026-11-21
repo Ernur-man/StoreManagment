@@ -5,7 +5,16 @@ import { prisma } from './prisma.js';
 import { can, type Role } from './constants.js';
 
 const COOKIE_NAME = 'wishstock_session';
-const SECRET = process.env.JWT_SECRET || 'wishstock-insecure-development-secret';
+const DEV_JWT_SECRET = 'wishstock-insecure-development-secret';
+
+function jwtSecret(): string {
+  const configured = process.env.JWT_SECRET;
+  if (configured?.trim()) return configured;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET is required in production');
+  }
+  return DEV_JWT_SECRET;
+}
 
 export interface AuthUser {
   id: string;
@@ -26,7 +35,7 @@ export async function verifyPassword(password: string, hash: string): Promise<bo
 export function issueToken(user: AuthUser): string {
   return jwt.sign(
     { sub: user.id, storeId: user.storeId, role: user.role, name: user.name, email: user.email },
-    SECRET,
+    jwtSecret(),
     { expiresIn: '7d' },
   );
 }
@@ -65,7 +74,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return;
   }
   try {
-    const payload = jwt.verify(token, SECRET) as jwt.JwtPayload;
+    const payload = jwt.verify(token, jwtSecret()) as jwt.JwtPayload;
     const user = await prisma.user.findUnique({
       where: { id: String(payload.sub) },
       select: { id: true, storeId: true, name: true, email: true, role: true, active: true },

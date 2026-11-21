@@ -3,7 +3,7 @@ import { Prisma } from '@prisma/client';
 import { PAYMENT_PROVIDERS, type PaymentProviderName } from '../lib/constants.js';
 import { asyncRoute } from '../lib/http.js';
 import { applyPaymentEvent } from '../services/billing.js';
-import { PaymentVerificationError, normalizeWebhook } from '../services/payments.js';
+import { PaymentConfigurationError, PaymentVerificationError, configuredProvider, normalizeWebhook } from '../services/payments.js';
 
 /**
  * Provider signatures are computed over the raw request body. The Next.js
@@ -16,7 +16,7 @@ webhookRouter.post(
   '/:provider',
   asyncRoute(async (req, res) => {
     const provider = req.params.provider as PaymentProviderName;
-    if (!PAYMENT_PROVIDERS.includes(provider)) {
+    if (!PAYMENT_PROVIDERS.includes(provider) || provider !== configuredProvider()) {
       res.status(404).json({ error: 'NOT_FOUND', message: 'errors.notFound' });
       return;
     }
@@ -28,6 +28,10 @@ webhookRouter.post(
     } catch (error) {
       if (error instanceof PaymentVerificationError) {
         res.status(400).json({ error: 'INVALID_SIGNATURE', message: 'billing.errors.invalidSignature' });
+        return;
+      }
+      if (error instanceof PaymentConfigurationError) {
+        res.status(503).json({ error: 'PAYMENT_NOT_CONFIGURED', message: 'billing.errors.notConfigured' });
         return;
       }
       throw error;

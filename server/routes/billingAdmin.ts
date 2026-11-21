@@ -6,6 +6,7 @@ import { asyncRoute } from '../lib/http.js';
 import { prisma } from '../lib/prisma.js';
 import { addDays, subscriptionView } from '../lib/subscription.js';
 import { adminGrantSchema, adminSubscriptionStatusSchema } from '../lib/validation.js';
+import { configuredProvider } from '../services/payments.js';
 
 /** All admin billing endpoints are behind `billing:admin` (ADMIN has `*`). */
 export const adminBillingRouter = new Router();
@@ -61,6 +62,7 @@ adminBillingRouter.get(
       _count: true,
     });
     res.json({
+      demo: configuredProvider() === 'demo',
       stats: {
         totalSubscribers: views.length,
         active: count('active'),
@@ -121,7 +123,16 @@ adminBillingRouter.get(
       res.status(404).json({ message: 'errors.notFound' });
       return;
     }
-    res.json({ subscription: presentSubscription(subscription) });
+    const view = presentSubscription(subscription);
+    res.json({
+      subscription: {
+        ...view,
+        paymentTransactions: subscription.paymentTransactions.map((payment) => ({
+          ...payment,
+          demo: payment.provider === 'demo',
+        })),
+      },
+    });
   }),
 );
 
@@ -140,7 +151,7 @@ adminBillingRouter.patch(
     }
     let expiresAt = input.expiresAt;
     let startedAt = input.startedAt;
-    if (expiresAt === undefined && input.status === 'active') {
+    if (input.status === 'active' && (expiresAt === undefined || expiresAt === null)) {
       expiresAt = addDays(existing.expiresAt && existing.expiresAt > new Date() ? existing.expiresAt : new Date(), SUBSCRIPTION_DURATION_DAYS);
     }
     if (startedAt === undefined && input.status === 'active' && !existing.startedAt) startedAt = new Date();

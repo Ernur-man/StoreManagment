@@ -10,7 +10,11 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 
 const base = process.env.APP_URL ?? process.env.API_URL ?? 'http://localhost:3000';
-const demoSecret = process.env.PAYMENT_DEMO_WEBHOOK_SECRET ?? process.env.JWT_SECRET ?? 'wishstock-insecure-development-secret';
+const demoSecretValue = process.env.PAYMENT_DEMO_WEBHOOK_SECRET ?? process.env.JWT_SECRET;
+if (!demoSecretValue && process.env.NODE_ENV === 'production') {
+  throw new Error('PAYMENT_DEMO_WEBHOOK_SECRET or JWT_SECRET is required');
+}
+const demoSecret = demoSecretValue ?? 'wishstock-insecure-development-secret';
 const DAY = 86_400_000;
 
 function makeClient() {

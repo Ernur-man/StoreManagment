@@ -62,6 +62,9 @@ const MODELS = [
 
 function toDate(value) {
   if (value instanceof Date) return value;
+  if (typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value.trim()))) {
+    return new Date(Number(value));
+  }
   const text = String(value);
   const iso = text.includes(' ') ? text.replace(' ', 'T') : text;
   const withZone = /(?:Z|[+-]\d{2}:\d{2})$/i.test(iso) ? iso : `${iso}Z`;

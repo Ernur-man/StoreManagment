@@ -1,10 +1,11 @@
 import { Router } from '../lib/router.js';
 import { prisma } from '../lib/prisma.js';
-import { requireAuth } from '../lib/auth.js';
+import { requireAuth, requirePermission } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
 import { arrivalSchema } from '../lib/validation.js';
 import { registerArrival } from '../services/matching.js';
 import { requireProAccess } from '../lib/subscription.js';
+import { resolveStoreEmployeeId } from '../lib/tenant.js';
 
 const router = new Router();
 router.use(requireAuth);
@@ -63,9 +64,16 @@ router.get(
 
 router.post(
   '/',
+  requirePermission('arrivals:write'),
   asyncRoute(async (req, res) => {
     const input = arrivalSchema.parse(req.body);
-    const result = await registerArrival(input, req.authUser!);
+    const user = req.authUser!;
+    const employeeId = await resolveStoreEmployeeId(user.storeId, input.employeeId, user.id);
+    if (!employeeId) {
+      res.status(400).json({ message: 'errors.validation' });
+      return;
+    }
+    const result = await registerArrival({ ...input, employeeId }, user);
     res.status(201).json(result);
   }),
 );

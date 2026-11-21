@@ -4,7 +4,7 @@ WishStock runs as one Next.js app locally, just like on Vercel: the UI and `/api
 
 ## First run
 
-Requirements: Node.js 20+, npm, and a PostgreSQL database (local Postgres or a Neon branch from the Vercel Marketplace).
+Requirements: Node.js 20+, npm, and a PostgreSQL database (local Postgres or a Neon branch from the Vercel Marketplace). The one-time SQLite transfer script needs Node.js 22.5+; the running app works on Node.js 20+.
 
 ```bash
 npm install
@@ -26,10 +26,10 @@ Do not run `npm run db:seed` against a database that contains data you need to k
 |---|---|---|
 | `DATABASE_URL` | Pooled Prisma runtime URL | Include `?pgbouncer=true` when using Neon's pooler |
 | `DIRECT_URL` | Direct Prisma CLI URL | Used by `npm run db:migrate` |
-| `JWT_SECRET` | JWT signing secret | Long random value; never use the example value |
+| `JWT_SECRET` | JWT signing secret | Required in production; long random value, never the example value |
 | `APP_URL` | Public app origin | `http://localhost:3000` locally; HTTPS Vercel domain in production |
 | `PAYMENT_PROVIDER` | `demo` locally, `stripe` for a real integration | Demo works in production only as an explicitly labelled simulation; keep `demo` if no real provider is configured |
-| `PAYMENT_DEMO_WEBHOOK_SECRET` | HMAC secret for demo webhooks | Development/preview only |
+| `PAYMENT_DEMO_WEBHOOK_SECRET` | HMAC secret for demo webhooks | Required for demo webhooks in production; use a dedicated value |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe credentials | Required only for `PAYMENT_PROVIDER=stripe` |
 | `CLIENT_ORIGIN` | Optional CORS allowlist | Only needed for external credentialed API clients |
 | `COOKIE_SECURE` | Optional escape hatch | Normally unset; cookies are `Secure` in production |

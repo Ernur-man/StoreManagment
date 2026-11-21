@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { useI18n } from '../i18n';
 import { Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Textarea, Badge } from '../components/ui';
 import { isoDate, phoneHref, whatsappHref } from '../lib/utils';
+import { can } from '../lib/shared';
 import { toast } from '../store/toast';
 import { useAuthStore } from '../store/auth';
 import type { Arrival, AuthUser } from '../lib/types';
@@ -30,9 +31,11 @@ interface MatchResult {
 export function Arrivals() {
   const { t, td, formatDate, error: translateError } = useI18n();
   const currentUser = useAuthStore((state) => state.user);
+  const canWrite = can(currentUser?.role, 'arrivals:write');
   const [arrivals, setArrivals] = useState<Arrival[]>([]);
   const [users, setUsers] = useState<AuthUser[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState<MatchResult | null>(null);
@@ -47,12 +50,15 @@ export function Arrivals() {
     try {
       const data = await api.get<{ arrivals: Arrival[] }>('/arrivals');
       setArrivals(data.arrivals);
+      setLoadError(null);
       try {
         const usersData = await api.get<{ users: AuthUser[] }>('/settings/users');
         setUsers(usersData.users);
       } catch { /* keep default */ }
     } catch (err) {
-      toast.error(translateError((err as Error).message));
+      const message = translateError((err as Error).message);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -62,6 +68,10 @@ export function Arrivals() {
 
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (!canWrite) {
+      toast.error(t('auth.errors.forbidden'));
+      return;
+    }
     setSaving(true);
     try {
       const data = await api.post<MatchResult>('/arrivals', {
@@ -73,7 +83,7 @@ export function Arrivals() {
         unitCost: form.unitCost ? Number(form.unitCost) : null,
         supplier: form.supplier || null,
         notes: form.notes || null,
-        arrivalDate: new Date(`${form.arrivalDate}T12:00:00`).toISOString(),
+        arrivalDate: form.arrivalDate ? new Date(`${form.arrivalDate}T12:00:00`).toISOString() : new Date().toISOString(),
         employeeId: form.employeeId || currentUser?.id,
       });
       setResult(data);
@@ -96,8 +106,17 @@ export function Arrivals() {
         eyebrow={t('nav.arrivals')}
         title={t('arrivals.title')}
         subtitle={t('arrivals.subtitle')}
-        actions={<Button variant="primary" onClick={() => setFormOpen(true)} icon={<Plus className="h-4 w-4" />}>{t('arrivals.newArrival')}</Button>}
+        actions={canWrite ? <Button variant="primary" onClick={() => setFormOpen(true)} icon={<Plus className="h-4 w-4" />}>{t('arrivals.newArrival')}</Button> : undefined}
       />
+
+      {loadError && !loading && (
+        <Card className="mb-5 border-red-200 bg-red-50 p-4 text-sm text-red-700">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>{t('common.loadError')} {loadError}</span>
+            <Button size="sm" onClick={() => void load()}>{t('common.retry')}</Button>
+          </div>
+        </Card>
+      )}
 
       <div className="grid gap-5 xl:grid-cols-[1.6fr_1fr]">
         <Card>
@@ -144,7 +163,7 @@ export function Arrivals() {
               </div>
             ))}
             <div className="flex gap-2 rounded-xl bg-amber-50 p-3 text-xs text-amber-800"><Lightbulb className="h-4 w-4 shrink-0" /><p>{t('requests.purchaseHint')}</p></div>
-            <Button variant="primary" className="w-full" onClick={() => setFormOpen(true)} icon={<ArrowRight className="h-4 w-4" />}>{t('arrivals.newArrival')}</Button>
+            {canWrite && <Button variant="primary" className="w-full" onClick={() => setFormOpen(true)} icon={<ArrowRight className="h-4 w-4" />}>{t('arrivals.newArrival')}</Button>}
           </div>
         </Card>
       </div>
@@ -153,19 +172,18 @@ export function Arrivals() {
       <Modal open={formOpen} onClose={() => setFormOpen(false)} title={t('arrivals.newArrival')} subtitle={t('requests.matchHint')}
         footer={<>
           <Button onClick={() => setFormOpen(false)}>{t('common.cancel')}</Button>
-          <Button variant="primary" onClick={submit} disabled={saving}>{saving ? t('common.loading') : t('common.save')}</Button>
+          <Button type="submit" form="arrival-form" variant="primary" disabled={saving}>{saving ? t('common.loading') : t('common.save')}</Button>
         </>}>
-        <form onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
+        <form id="arrival-form" onSubmit={submit} className="grid gap-4 sm:grid-cols-2">
           <Field label={`${t('common.product')} *`}><Input required value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} /></Field>
           <Field label={`${t('common.sku')} *`} hint={t('arrivals.manualEntry')}><Input required value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} placeholder="SK-1024" /></Field>
           <Field label={`${t('common.size')} *`}><Input required value={form.size} onChange={(e) => setForm({ ...form, size: e.target.value })} placeholder="M" /></Field>
           <Field label={`${t('common.color')} *`}><Input required value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} placeholder="Black" /></Field>
           <Field label={`${t('common.quantity')} *`}><Input required type="number" min="1" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} /></Field>
           <Field label={t('arrivals.unitCost')}><Input type="number" min="0" step="0.01" value={form.unitCost} onChange={(e) => setForm({ ...form, unitCost: e.target.value })} /></Field>
-          <Field label={t('arrivals.arrivalDate')}><Input type="date" value={form.arrivalDate} onChange={(e) => setForm({ ...form, arrivalDate: e.target.value })} /></Field>
+          <Field label={t('arrivals.arrivalDate')}><Input required type="date" value={form.arrivalDate} onChange={(e) => setForm({ ...form, arrivalDate: e.target.value })} /></Field>
           <Field label={t('arrivals.employee')}><Select value={form.employeeId} onChange={(e) => setForm({ ...form, employeeId: e.target.value })}>{users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}{users.length === 0 && currentUser && <option value={currentUser.id}>{currentUser.name}</option>}</Select></Field>
           <Field label={t('common.supplier')}><Input value={form.supplier} onChange={(e) => setForm({ ...form, supplier: e.target.value })} /></Field>
-          <Field label={t('common.notes')}><Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <Field label={t('requests.additionalNotes')} className="sm:col-span-2"><Textarea value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} /></Field>
           <div className="rounded-xl bg-indigo-50/70 px-4 py-3 text-xs text-indigo-900 sm:col-span-2">{t('requests.matchHint')}</div>
           <button type="submit" className="hidden" />
@@ -173,7 +191,7 @@ export function Arrivals() {
       </Modal>
 
       {/* Result */}
-      <Modal open={Boolean(result)} onClose={() => setResult(null)} title={t('arrivals.matching')} subtitle={result ? t('arrivals.successMatched', { count: result.matchedRequests.length }) : ''}
+      <Modal open={Boolean(result)} onClose={() => setResult(null)} title={t('arrivals.matching')} subtitle={result ? t('arrivals.resultSubtitle', { count: result.matchedRequests.length }) : ''}
         footer={<Button variant="primary" onClick={() => setResult(null)}>{t('common.close')}</Button>}>
         {result && (
           <div className="space-y-4">

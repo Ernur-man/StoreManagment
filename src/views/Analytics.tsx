@@ -6,7 +6,7 @@ import { BarChart3, ClipboardList, Percent, ShoppingCart, TrendingUp, Users } fr
 import { api } from '../lib/api';
 import { useI18n } from '../i18n';
 import type { TranslationKey } from '../i18n/translations';
-import { Card, EmptyState, PageHeader, SectionTitle } from '../components/ui';
+import { Button, Card, EmptyState, PageHeader, SectionTitle } from '../components/ui';
 import { chartColors, isoDate } from '../lib/utils';
 import { toast } from '../store/toast';
 import type { AnalyticsData } from '../lib/types';
@@ -14,10 +14,11 @@ import type { AnalyticsData } from '../lib/types';
 type RangeKey = '7' | '30' | '90' | 'all';
 
 export function Analytics() {
-  const { t, td, formatNumber, formatMoney, error: translateError } = useI18n();
+  const { t, td, formatNumber, error: translateError } = useI18n();
   const [range, setRange] = useState<RangeKey>('30');
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -30,8 +31,11 @@ export function Analytics() {
       }
       const query = params.toString();
       setData(await api.get<AnalyticsData>(`/dashboard/analytics${query ? `?${query}` : ''}`));
+      setLoadError(null);
     } catch (err) {
-      toast.error(translateError((err as Error).message));
+      const message = translateError((err as Error).message);
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -47,7 +51,12 @@ export function Analytics() {
   ], [t]);
 
   if (!data) {
-    return <div className="py-16 text-center text-sm text-slate-500">{loading ? t('common.loading') : t('analytics.noData')}</div>;
+    return loadError ? (
+      <Card className="mx-auto mt-10 max-w-lg p-6 text-center">
+        <p className="text-sm text-red-700">{t('common.loadError')} {loadError}</p>
+        <Button className="mt-4" onClick={() => void load()}>{t('common.retry')}</Button>
+      </Card>
+    ) : <div className="py-16 text-center text-sm text-slate-500">{loading ? t('common.loading') : t('analytics.noData')}</div>;
   }
 
   const summary = data.summary;
@@ -61,7 +70,7 @@ export function Analytics() {
     { label: t('analytics.totalRequests'), value: formatNumber(summary.totalRequests), icon: ClipboardList, tone: 'bg-indigo-50 text-indigo-600' },
     { label: t('analytics.conversionRate'), value: `${summary.conversionRate}%`, icon: Percent, tone: 'bg-emerald-50 text-emerald-600' },
     { label: t('analytics.recoveredSales'), value: formatNumber(summary.recoveredSales), icon: ShoppingCart, tone: 'bg-violet-50 text-violet-600' },
-    { label: t('analytics.revenue'), value: formatMoney(summary.revenue), icon: TrendingUp, tone: 'bg-sky-50 text-sky-600' },
+    { label: t('analytics.revenue'), value: `${formatNumber(summary.revenue)} ₸`, icon: TrendingUp, tone: 'bg-sky-50 text-sky-600' },
     { label: t('analytics.uniqueCustomers'), value: formatNumber(data.uniqueCustomers), icon: Users, tone: 'bg-amber-50 text-amber-600' },
     { label: t('analytics.avgPerDay'), value: formatNumber(summary.avgRequestsPerDay), icon: BarChart3, tone: 'bg-slate-100 text-slate-600' },
   ];

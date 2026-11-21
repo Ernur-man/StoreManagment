@@ -18,7 +18,7 @@ export function notFound(_req: Request, res: Response) {
 
 export function errorHandler(error: unknown, _req: Request, res: Response, _next: NextFunction) {
   if (error instanceof ZodError) {
-    res.status(400).json({ error: 'VALIDATION_ERROR', message: firstZodMessage(error), issues: error.issues });
+    res.status(400).json({ error: 'VALIDATION_ERROR', message: firstZodMessage(error) });
     return;
   }
   const prismaError = handlePrismaKnownError(error);

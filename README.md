@@ -21,7 +21,7 @@ WishStock is a **single Next.js 14 App Router + TypeScript project**. The browse
 
 ## Quick start (local)
 
-Requirements: Node.js 20 or newer, npm, and a PostgreSQL connection. Use a throwaway local Postgres database or a Neon branch; the old SQLite file is only used for the one-time transfer described below.
+Requirements: Node.js 20 or newer, npm, and a PostgreSQL connection. Use a throwaway local Postgres database or a Neon branch; the old SQLite file is only used for the one-time transfer described below. The transfer script additionally needs Node.js 22.5+ for `node:sqlite`; the running app works on Node.js 20+.
 
 ```bash
 npm install
@@ -51,13 +51,13 @@ The seeded demo states demonstrate the whole subscription lifecycle: the admin h
 
 ## Preserving existing data
 
-The original SQLite database and migration history are kept in the repository:
+The original SQLite database and migration history are present in the working copy but the database binaries are gitignored, so they are not pushed to GitHub:
 
 - `prisma/dev.db` — original source database.
 - `prisma/dev.sqlite.backup` — byte-for-byte backup of the source.
 - `prisma/sqlite-migrations/` — original SQLite migrations, retained for history only. Do **not** apply these to PostgreSQL.
 
-After `npm run db:migrate` has created the PostgreSQL schema, copy the rows without deleting or reseeding anything:
+If a fresh clone needs the legacy rows, copy one of the SQLite files into `prisma/` from a trusted backup before running the transfer. After `npm run db:migrate` has created the PostgreSQL schema, copy the rows without deleting or reseeding anything (Node.js 22.5+ required):
 
 ```bash
 DATABASE_URL="<pooled postgres url>" npm run db:transfer
@@ -74,9 +74,9 @@ There is exactly one plan: **WishStock Pro — 7,990 ₸ / month**, with **30 da
 - **Subscription page (`/billing`)** — plan name, `7,990 ₸ / month`, included features, current status, start date, next conditional renewal date (DEMO) and expiration date, **Subscribe Now**, **Payment Methods**, DEMO renewal simulation and **Manage Subscription** with cancellation. Login, account settings and billing are never Pro-gated.
 - **Statuses** — `inactive`, `pending`, `active`, `past_due`, `cancelled`, `expired`. Access is granted only while a paid period is running (`active`) or after cancellation until the stored expiration date. Expiry is derived from timestamps on every request, so no scheduler is needed.
 - **Backend enforcement** — `requireProAccess` protects products, requests, arrivals, customers, dashboard and notifications APIs. The frontend `RequirePro` layout mirrors this only for navigation; it is never the security boundary.
-- **Payments** — checkout is created on the server. The client never sends a status, amount or payment result. Card data is handled only in the DEMO vault: a test PAN/CVV is validated in memory and discarded, while the database stores only brand, last4, holder name and expiry. Real activation happens only after a **signed webhook** from the configured provider.
+- **Payments** — checkout is created on the server. The client never sends a status, amount or payment result, and cannot choose a provider other than the server-configured one. Card data is handled only in the DEMO vault: only published test PANs are accepted; PAN/CVV are validated in memory and discarded, while the database stores only brand, last4, holder name and expiry. Activation happens only after a **signed webhook** (Stripe) or a **signed demo confirmation** when `PAYMENT_PROVIDER=demo`.
 - **Demo mode** — available whenever `PAYMENT_PROVIDER=demo`, including production, and always labelled as a test. Demo checkout can simulate success, failure and cancellation for acceptance testing; no bank is contacted and no money is charged. With `PAYMENT_PROVIDER=stripe` the demo flow is disabled.
-- **Payment Methods (`/billing/payment-methods`)** — attach, replace or remove a test Visa/Mastercard. Only a masked `DEMO CARD` (for example `Visa •••• 4242`) is ever shown or stored.
+- **Payment Methods (`/billing/payment-methods`)** — attach, replace or remove a published test Visa/Mastercard number (for example `4242 4242 4242 4242`). Real card numbers are rejected. Only a masked `DEMO CARD` (for example `Visa •••• 4242`) is ever shown or stored.
 - **Admin management** — visible only to `billing:admin` (the `ADMIN` role). Shows subscriber counts, monthly revenue, subscription history and per-record payment history. Admins can repair a status or grant 30 days manually; every change is written to the audit log.
 
 ### Webhooks
@@ -128,10 +128,10 @@ Set these in Vercel Project Settings → Environment Variables (or in a local `.
 |---|---|
 | `DATABASE_URL` | Pooled PostgreSQL URL used at runtime; include `?pgbouncer=true` when using Neon's pooler |
 | `DIRECT_URL` | Direct (non-pooler) PostgreSQL URL used by Prisma migrations |
-| `JWT_SECRET` | Long random value; signs session JWTs and demo checkout tickets |
+| `JWT_SECRET` | Required in production; long random value that signs session JWTs and demo checkout tickets |
 | `APP_URL` | Public HTTPS origin, used for provider redirect URLs (not localhost in production) |
 | `PAYMENT_PROVIDER` | `demo` for the labelled test mode (also in production); `stripe` only with a real merchant account |
-| `PAYMENT_DEMO_WEBHOOK_SECRET` | HMAC secret for locally signed demo webhooks (development/preview only) |
+| `PAYMENT_DEMO_WEBHOOK_SECRET` | Required for signed demo webhooks in production; use a dedicated secret, not `JWT_SECRET` |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Required when `PAYMENT_PROVIDER=stripe` |
 | `CLIENT_ORIGIN` | Optional comma-separated CORS allowlist for credentialed external API clients |
 | `COOKIE_SECURE` | Optional; cookies are already `Secure` when `NODE_ENV=production` |
@@ -146,8 +146,8 @@ Keep real credentials in environment variables only. `.env` is gitignored and mu
 3. Add the application variables from the table above. Use the final Vercel HTTPS domain for `APP_URL`.
 4. From a local/CI machine with the database credentials, run `npm run db:migrate` and `npm run db:transfer` before sending traffic. Do not run `db:seed` against the production database.
 5. Deploy. Vercel runs `npm install` (the `postinstall` script runs `prisma generate`) and `npm run build`. APIs are available at `https://<domain>/api/*`.
-6. Register the Stripe webhook at `https://<domain>/api/billing/webhook/stripe` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` and `checkout.session.expired`.
-7. Verify `/api/health`, login, Pro gating and a signed webhook on a preview deployment. Do not run the mutating smoke scripts against production.
+6. Only if `PAYMENT_PROVIDER=stripe`, register the Stripe webhook at `https://<domain>/api/billing/webhook/stripe` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` and `checkout.session.expired`. Demo mode needs no external provider or webhook registration.
+7. Verify `/api/health`, login, Pro gating and the selected payment flow on a preview deployment. Do not run the mutating smoke scripts against production.
 
 No deployment or Git push is performed as part of the repository changes.
 

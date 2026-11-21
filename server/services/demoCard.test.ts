@@ -54,7 +54,9 @@ describe('demo card validation', () => {
     const cases: Array<[Partial<DemoCardInput>, string]> = [
       [{ number: '4242424242424241' }, 'billing.card.errors.invalidNumber'],
       [{ number: '378282246310005' }, 'billing.card.errors.invalidNumber'],
+      [{ number: '4111111111111111' }, 'billing.card.errors.invalidNumber'],
       [{ cvv: '12' }, 'billing.card.errors.invalidCvv'],
+      [{ cvv: '1234' }, 'billing.card.errors.invalidCvv'],
       [{ holderName: 'X1' }, 'billing.card.errors.invalidHolder'],
       [{ expiry: '13/29' }, 'billing.card.errors.invalidExpiry'],
       [{ expiry: '01/20' }, 'billing.card.errors.invalidExpiry'],

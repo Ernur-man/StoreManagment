@@ -4,6 +4,10 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+if (process.env.NODE_ENV === 'production') {
+  throw new Error('Refusing to seed demo data in production');
+}
+
 const STORE_ID = 'store-demo-1';
 const PLAN_ID = 'plan-wishstock-pro';
 const daysAgo = (days: number, hours = 0) =>

@@ -11,7 +11,7 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   icon?: ReactNode;
 }
 
-export function Button({ variant = 'secondary', size = 'md', icon, className, children, ...props }: ButtonProps) {
+export function Button({ variant = 'secondary', size = 'md', icon, className, children, type = 'button', ...props }: ButtonProps) {
   const variants: Record<ButtonVariant, string> = {
     primary: 'bg-indigo-600 text-white shadow-sm hover:bg-indigo-700 focus:ring-indigo-300',
     secondary: 'bg-white text-slate-700 ring-1 ring-inset ring-slate-200 hover:bg-slate-50 focus:ring-indigo-200',
@@ -21,6 +21,7 @@ export function Button({ variant = 'secondary', size = 'md', icon, className, ch
   };
   return (
     <button
+      type={type}
       className={cn(
         'inline-flex items-center justify-center gap-2 rounded-xl font-semibold transition-colors focus:outline-none focus:ring-2 disabled:cursor-not-allowed disabled:opacity-50',
         size === 'sm' ? 'min-h-9 px-3 text-xs' : 'min-h-10 px-4 text-sm',

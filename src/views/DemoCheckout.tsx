@@ -15,13 +15,17 @@ export function DemoCheckout() {
   const navigate = useNavigate();
   const { t, formatNumber, error: translateError } = useI18n();
   const [plan, setPlan] = useState<SubscriptionPlan | null>(null);
+  const [demoMode, setDemoMode] = useState<boolean | null>(null);
   const [card, setCard] = useState<DemoCardResponse['card']>(null);
   const [busy, setBusy] = useState<Outcome | null>(null);
 
   useEffect(() => {
     void api
-      .get<{ plan: SubscriptionPlan }>('/billing/plan')
-      .then((data) => setPlan(data.plan))
+      .get<{ plan: SubscriptionPlan; demoMode: boolean }>('/billing/plan')
+      .then((data) => {
+        setPlan(data.plan);
+        setDemoMode(data.demoMode);
+      })
       .catch(() => { /* the page below still explains the problem */ });
     void api
       .get<DemoCardResponse>('/billing/card')
@@ -30,7 +34,7 @@ export function DemoCheckout() {
   }, []);
 
   async function confirm(outcome: Outcome) {
-    if (!token) return;
+    if (!token || demoMode === false) return;
     setBusy(outcome);
     try {
       await api.post('/billing/demo/confirm', { token, outcome });
@@ -50,6 +54,12 @@ export function DemoCheckout() {
           <p className="mt-1 text-xs leading-relaxed">{t('billing.demoNoticeBody')}</p>
         </div>
       </div>
+
+      {demoMode === false && (
+        <div className="mb-5 rounded-2xl border border-red-200 bg-red-50 px-5 py-4 text-sm text-red-700">
+          {t('billing.errors.demoDisabled')}
+        </div>
+      )}
 
       <Card className="p-6 sm:p-8">
         <div className="flex items-center gap-3">
@@ -85,13 +95,13 @@ export function DemoCheckout() {
         )}
 
         <div className="mt-6 grid gap-3 sm:grid-cols-3">
-          <Button variant="primary" icon={<CheckCircle2 className="h-4 w-4" />} onClick={() => void confirm('success')} disabled={!token || !!busy}>
+          <Button variant="primary" icon={<CheckCircle2 className="h-4 w-4" />} onClick={() => void confirm('success')} disabled={!token || demoMode === false || !!busy}>
             {busy === 'success' ? t('common.loading') : t('billing.demoPay')}
           </Button>
-          <Button variant="danger" icon={<XCircle className="h-4 w-4" />} onClick={() => void confirm('failure')} disabled={!token || !!busy}>
+          <Button variant="danger" icon={<XCircle className="h-4 w-4" />} onClick={() => void confirm('failure')} disabled={!token || demoMode === false || !!busy}>
             {busy === 'failure' ? t('common.loading') : t('billing.demoFail')}
           </Button>
-          <Button icon={<CreditCard className="h-4 w-4" />} onClick={() => void confirm('cancel')} disabled={!token || !!busy}>
+          <Button icon={<CreditCard className="h-4 w-4" />} onClick={() => void confirm('cancel')} disabled={!token || demoMode === false || !!busy}>
             {busy === 'cancel' ? t('common.loading') : t('billing.demoCancel')}
           </Button>
         </div>

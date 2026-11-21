@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { Prisma } from '@prisma/client';
 import type { AuthUser } from '../lib/auth.js';
 import {
   SUBSCRIPTION_DURATION_DAYS,
@@ -78,12 +79,10 @@ export async function subscriptionResponse(user: AuthUser) {
 }
 
 async function ensureSubscription(user: AuthUser, planId: string) {
-  const existing = await prisma.subscription.findUnique({
+  return prisma.subscription.upsert({
     where: { storeId_userId_planId: { storeId: user.storeId, userId: user.id, planId } },
-  });
-  if (existing) return existing;
-  return prisma.subscription.create({
-    data: { storeId: user.storeId, userId: user.id, planId, status: 'inactive' },
+    create: { storeId: user.storeId, userId: user.id, planId, status: 'inactive' },
+    update: {},
   });
 }
 
@@ -199,101 +198,116 @@ export interface ApplyResult {
  * against two different events for the same payment.
  */
 export async function applyPaymentEvent(event: NormalizedPaymentEvent): Promise<ApplyResult> {
-  return prisma.$transaction(async (tx) => {
-    const seen = await tx.paymentEvent.findUnique({
-      where: { provider_eventId: { provider: event.provider, eventId: event.eventId } },
-    });
-    if (seen) return { duplicate: true, applied: false, reason: 'event already processed' };
-
-    const transaction = event.transactionId
-      ? await tx.paymentTransaction.findUnique({ where: { id: event.transactionId } })
-      : event.providerPaymentId
-        ? await tx.paymentTransaction.findUnique({ where: { providerPaymentId: event.providerPaymentId } })
-        : null;
-
-    await tx.paymentEvent.create({
-      data: {
-        provider: event.provider,
-        eventId: event.eventId,
-        type: event.type,
-        transactionId: transaction?.id ?? null,
-      },
-    });
-
-    if (!transaction) return { duplicate: false, applied: false, reason: 'transaction not found' };
-    if (transaction.provider !== event.provider) return { duplicate: false, applied: false, reason: 'provider mismatch' };
-    if (event.providerPaymentId && transaction.providerPaymentId && transaction.providerPaymentId !== event.providerPaymentId) {
-      return { duplicate: false, applied: false, reason: 'payment id mismatch' };
-    }
-    if (transaction.status !== 'pending') {
-      return { duplicate: false, applied: false, reason: 'payment already finalized' };
-    }
-
-    const now = new Date();
-    const subscription = await tx.subscription.findUniqueOrThrow({ where: { id: transaction.subscriptionId } });
-    const plan = await tx.subscriptionPlan.findUniqueOrThrow({ where: { id: transaction.planId } });
-    if (transaction.amountKzt !== plan.priceKzt || transaction.currency !== plan.currency) {
-      return { duplicate: false, applied: false, reason: 'amount or currency mismatch' };
-    }
-    if (event.amountMinor !== undefined && event.amountMinor !== plan.priceKzt * 100) {
-      return { duplicate: false, applied: false, reason: 'provider amount mismatch' };
-    }
-
-    if (event.type === 'payment.succeeded') {
-      await tx.paymentTransaction.update({
-        where: { id: transaction.id },
-        data: { status: 'succeeded', completedAt: now },
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const seen = await tx.paymentEvent.findUnique({
+        where: { provider_eventId: { provider: event.provider, eventId: event.eventId } },
       });
-      // Renewing before expiry extends the paid period instead of resetting it.
-      const periodStart = subscription.expiresAt && subscription.expiresAt > now ? subscription.expiresAt : now;
-      const expiresAt = addDays(periodStart, plan.durationDays || SUBSCRIPTION_DURATION_DAYS);
-      await tx.subscription.update({
-        where: { id: subscription.id },
+      if (seen) return { duplicate: true, applied: false, reason: 'event already processed' };
+
+      const transaction = event.transactionId
+        ? await tx.paymentTransaction.findUnique({ where: { id: event.transactionId } })
+        : event.providerPaymentId
+          ? await tx.paymentTransaction.findUnique({ where: { providerPaymentId: event.providerPaymentId } })
+          : null;
+
+      if (!transaction) return { duplicate: false, applied: false, reason: 'transaction not found' };
+      if (transaction.provider !== event.provider) return { duplicate: false, applied: false, reason: 'provider mismatch' };
+      if (event.providerPaymentId && transaction.providerPaymentId && transaction.providerPaymentId !== event.providerPaymentId) {
+        return { duplicate: false, applied: false, reason: 'payment id mismatch' };
+      }
+      if (transaction.status !== 'pending') {
+        return { duplicate: false, applied: false, reason: 'payment already finalized' };
+      }
+
+      const now = new Date();
+      const subscription = await tx.subscription.findUniqueOrThrow({ where: { id: transaction.subscriptionId } });
+      const plan = await tx.subscriptionPlan.findUniqueOrThrow({ where: { id: transaction.planId } });
+      if (transaction.amountKzt !== plan.priceKzt || transaction.currency !== plan.currency) {
+        return { duplicate: false, applied: false, reason: 'amount or currency mismatch' };
+      }
+      if (event.amountMinor !== undefined && event.amountMinor !== plan.priceKzt * 100) {
+        return { duplicate: false, applied: false, reason: 'provider amount mismatch' };
+      }
+      if (event.currency && event.currency.toLowerCase() !== plan.currency.toLowerCase()) {
+        return { duplicate: false, applied: false, reason: 'provider currency mismatch' };
+      }
+
+      // Unique(provider,eventId) makes duplicate delivery harmless even when
+      // two transactions both read the pending payment concurrently.
+      await tx.paymentEvent.create({
         data: {
-          status: 'active',
           provider: event.provider,
-          startedAt: subscription.startedAt ?? now,
-          expiresAt,
-          nextPaymentAt: expiresAt,
-          cancelledAt: null,
-          lastPaymentAt: now,
+          eventId: event.eventId,
+          type: event.type,
+          transactionId: transaction.id,
         },
       });
-      return { duplicate: false, applied: true };
-    }
 
-    if (event.type === 'payment.failed') {
-      await tx.paymentTransaction.update({
-        where: { id: transaction.id },
-        data: { status: 'failed', failureReason: event.reason?.slice(0, 300) ?? 'Payment failed', completedAt: now },
-      });
-      // A failed renewal must not revoke a period that was already paid for.
-      const paidPeriodActive = subscription.status === 'active' && !!subscription.expiresAt && subscription.expiresAt > now;
-      await tx.subscription.update({
-        where: { id: subscription.id },
-        data: {
-          status: paidPeriodActive ? 'active' : 'past_due',
-          ...(paidPeriodActive ? {} : { nextPaymentAt: null }),
-        },
-      });
-      return { duplicate: false, applied: true };
-    }
+      if (event.type === 'payment.succeeded') {
+        const finalized = await tx.paymentTransaction.updateMany({
+          where: { id: transaction.id, status: 'pending' },
+          data: { status: 'succeeded', completedAt: now },
+        });
+        if (finalized.count !== 1) return { duplicate: false, applied: false, reason: 'payment already finalized' };
+        // Renewing before expiry extends the paid period instead of resetting it.
+        const periodStart = subscription.expiresAt && subscription.expiresAt > now ? subscription.expiresAt : now;
+        const expiresAt = addDays(periodStart, plan.durationDays || SUBSCRIPTION_DURATION_DAYS);
+        await tx.subscription.update({
+          where: { id: subscription.id },
+          data: {
+            status: 'active',
+            provider: event.provider,
+            startedAt: subscription.startedAt ?? now,
+            expiresAt,
+            nextPaymentAt: expiresAt,
+            cancelledAt: null,
+            lastPaymentAt: now,
+          },
+        });
+        return { duplicate: false, applied: true };
+      }
 
-    if (event.type === 'payment.cancelled') {
-      await tx.paymentTransaction.update({
-        where: { id: transaction.id },
-        data: { status: 'cancelled', completedAt: now },
-      });
-      await tx.subscription.update({
-        where: { id: subscription.id },
-        data: { status: 'cancelled', cancelledAt: now, nextPaymentAt: null },
-      });
-      return { duplicate: false, applied: true };
-    }
+      if (event.type === 'payment.failed') {
+        const finalized = await tx.paymentTransaction.updateMany({
+          where: { id: transaction.id, status: 'pending' },
+          data: { status: 'failed', failureReason: event.reason?.slice(0, 300) ?? 'Payment failed', completedAt: now },
+        });
+        if (finalized.count !== 1) return { duplicate: false, applied: false, reason: 'payment already finalized' };
+        // A failed renewal must not revoke a period that was already paid for.
+        const paidPeriodActive = subscription.status === 'active' && !!subscription.expiresAt && subscription.expiresAt > now;
+        await tx.subscription.update({
+          where: { id: subscription.id },
+          data: {
+            status: paidPeriodActive ? 'active' : 'past_due',
+            ...(paidPeriodActive ? {} : { nextPaymentAt: null }),
+          },
+        });
+        return { duplicate: false, applied: true };
+      }
 
-    // A pending event is only recorded; no access decision changes.
-    return { duplicate: false, applied: false, reason: 'pending event recorded' };
-  });
+      if (event.type === 'payment.cancelled') {
+        const finalized = await tx.paymentTransaction.updateMany({
+          where: { id: transaction.id, status: 'pending' },
+          data: { status: 'cancelled', completedAt: now },
+        });
+        if (finalized.count !== 1) return { duplicate: false, applied: false, reason: 'payment already finalized' };
+        await tx.subscription.update({
+          where: { id: subscription.id },
+          data: { status: 'cancelled', cancelledAt: now, nextPaymentAt: null },
+        });
+        return { duplicate: false, applied: true };
+      }
+
+      // A pending event is only recorded; no access decision changes.
+      return { duplicate: false, applied: false, reason: 'pending event recorded' };
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      return { duplicate: true, applied: false, reason: 'event already processed' };
+    }
+    throw error;
+  }
 }
 
 /** Demo checkout confirmation. The token is server-signed; the outcome is the only client input. */
@@ -333,7 +347,7 @@ export async function confirmDemoPayment(
 /** Manual cancellation keeps the paid period; it never deletes access early. */
 export async function cancelOwnSubscription(user: AuthUser) {
   const subscription = await getSubscriptionForUser(user);
-  if (!subscription) return null;
+  if (!subscription || subscription.status === 'cancelled') return subscription;
   const now = new Date();
   const updated = await prisma.subscription.update({
     where: { id: subscription.id },

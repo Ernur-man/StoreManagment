@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js';
 import { availabilityFor } from '../lib/constants.js';
+import { parseDateBoundary } from '../lib/date.js';
 
 type DateRange = { from?: Date; to?: Date };
 
@@ -17,11 +18,11 @@ function dayKey(date: Date): string {
 
 function demandTrend(dates: Date[], days: number) {
   const today = new Date();
-  today.setHours(23, 59, 59, 999);
+  today.setUTCHours(23, 59, 59, 999);
   const buckets: Array<{ date: string; requests: number }> = [];
   for (let i = days - 1; i >= 0; i -= 1) {
     const d = new Date(today);
-    d.setDate(d.getDate() - i);
+    d.setUTCDate(d.getUTCDate() - i);
     buckets.push({ date: dayKey(d), requests: 0 });
   }
   const index = new Map(buckets.map((b, i) => [b.date, i]));
@@ -139,11 +140,14 @@ export async function getAnalytics(storeId: string, range: DateRange = {}) {
     threshold: v.lowStockThreshold,
   }));
 
+  const rangeEnd = range.to ?? new Date();
+  const earliestRequest = requests.length > 0
+    ? new Date(Math.min(...requests.map((request) => request.requestDate.getTime())))
+    : rangeEnd;
+  const rangeStart = range.from ?? earliestRequest;
   const spanDays = Math.max(
     1,
-    Math.ceil(
-      ((range.to ?? new Date()).getTime() - (range.from ?? new Date(0)).getTime()) / 86_400_000,
-    ),
+    Math.ceil((rangeEnd.getTime() - rangeStart.getTime()) / 86_400_000),
   );
 
   return {
@@ -187,15 +191,12 @@ export async function getAnalytics(storeId: string, range: DateRange = {}) {
 export function parseRange(from?: unknown, to?: unknown): DateRange {
   const result: DateRange = {};
   if (typeof from === 'string' && from) {
-    const d = new Date(from);
-    if (!Number.isNaN(d.getTime())) result.from = d;
+    const parsed = parseDateBoundary(from, false);
+    if (parsed) result.from = parsed;
   }
   if (typeof to === 'string' && to) {
-    const d = new Date(to);
-    if (!Number.isNaN(d.getTime())) {
-      d.setHours(23, 59, 59, 999);
-      result.to = d;
-    }
+    const parsed = parseDateBoundary(to, true);
+    if (parsed) result.to = parsed;
   }
   return result;
 }

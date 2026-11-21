@@ -5,7 +5,6 @@ import { requireAuth, requirePermission } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
 import { settingsSchema, userSchema } from '../lib/validation.js';
 import { writeAudit } from '../lib/audit.js';
-import { ROLES } from '../lib/constants.js';
 
 const router = new Router();
 router.use(requireAuth);
@@ -77,6 +76,10 @@ router.post(
       return;
     }
     const user = req.authUser!;
+    if (data.role === 'ADMIN' && user.role !== 'ADMIN') {
+      res.status(403).json({ message: 'settings.errors.adminOnly' });
+      return;
+    }
     const created = await prisma.user.create({
       data: {
         storeId: user.storeId,
@@ -105,16 +108,20 @@ router.patch(
       res.status(404).json({ message: 'errors.notFound' });
       return;
     }
+    if (user.role !== 'ADMIN' && (target.role === 'ADMIN' || data.role === 'ADMIN')) {
+      res.status(403).json({ message: 'settings.errors.adminOnly' });
+      return;
+    }
+    if (user.role !== 'ADMIN' && data.password && target.id !== user.id) {
+      res.status(403).json({ message: 'settings.errors.adminOnly' });
+      return;
+    }
     if (target.role === 'ADMIN' && (data.role && data.role !== 'ADMIN' || data.active === false)) {
       const admins = await prisma.user.count({ where: { storeId: user.storeId, role: 'ADMIN', active: true } });
       if (admins <= 1) {
         res.status(409).json({ message: 'settings.errors.lastAdmin' });
         return;
       }
-    }
-    if (target.role !== 'ADMIN' && data.role && !ROLES.includes(data.role)) {
-      res.status(400).json({ message: 'errors.validation' });
-      return;
     }
     await prisma.user.update({
       where: { id: target.id },
@@ -145,6 +152,10 @@ router.delete(
     });
     if (!target) {
       res.status(404).json({ message: 'errors.notFound' });
+      return;
+    }
+    if (target.role === 'ADMIN' && user.role !== 'ADMIN') {
+      res.status(403).json({ message: 'settings.errors.adminOnly' });
       return;
     }
     await prisma.user.delete({ where: { id: target.id } });
