@@ -15,16 +15,16 @@ datasource db {
 }
 
 model Store {
-  id                String              @id @default(uuid())
+  id                String   @id @default(uuid())
   name              String
-  code              String              @unique
-  currency          String              @default("USD")
+  code              String   @unique
+  currency          String   @default("USD")
   address           String?
   phone             String?
   email             String?
-  lowStockThreshold Int                 @default(3)
-  createdAt         DateTime            @default(now())
-  updatedAt         DateTime            @updatedAt
+  lowStockThreshold Int      @default(3)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   users         User[]
   products      Product[]
@@ -37,9 +37,10 @@ model Store {
   sales         Sale[]
   auditLogs     AuditLog[]
 
-  subscriptions       Subscription[]
-  paymentTransactions PaymentTransaction[]
-  demoCards           DemoCard[]
+  subscriptions             Subscription[]
+  paymentTransactions       PaymentTransaction[]
+  demoCards                 DemoCard[]
+  arrivalEmailNotifications ArrivalEmailNotification[]
 }
 
 model User {
@@ -54,13 +55,13 @@ model User {
   updatedAt    DateTime  @updatedAt
   lastLoginAt  DateTime?
 
-  store           Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  requests        CustomerRequest[] @relation("RequestEmployee")
-  contacts        CustomerRequest[] @relation("ContactEmployee")
-  arrivals        StockArrival[]
-  sales           Sale[]
-  auditLogs       AuditLog[]
-  notifications   Notification[]
+  store         Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  requests      CustomerRequest[] @relation("RequestEmployee")
+  contacts      CustomerRequest[] @relation("ContactEmployee")
+  arrivals      StockArrival[]
+  sales         Sale[]
+  auditLogs     AuditLog[]
+  notifications Notification[]
 
   subscriptions       Subscription[]
   paymentTransactions PaymentTransaction[]
@@ -82,7 +83,7 @@ model Product {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  store    Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store    Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
   variants ProductVariant[]
   requests CustomerRequest[]
 
@@ -149,37 +150,43 @@ model Customer {
 }
 
 model CustomerRequest {
-  id               String    @id @default(uuid())
-  storeId          String
-  requestNumber    String
-  customerId       String
-  productId        String?
-  variantId        String?
-  productName      String
-  sku              String
-  category         String?
-  size             String
-  color            String
-  source           String    @default("IN_STORE")
-  notes            String?
-  status           String    @default("WAITING")
-  requestDate      DateTime  @default(now())
-  employeeId       String?
-  availableAt      DateTime?
-  contactedAt      DateTime?
+  id                String    @id @default(uuid())
+  storeId           String
+  requestNumber     String
+  customerId        String
+  productId         String?
+  variantId         String?
+  productName       String
+  sku               String
+  category          String?
+  size              String
+  color             String
+  source            String    @default("IN_STORE")
+  notes             String?
+  // Optional, validated notification address. Existing rows stay valid because
+  // the column is nullable; requests without an email simply skip email sending.
+  email             String?
+  // Only en/ru are accepted by the API. Defaults to en so existing rows remain valid.
+  emailLanguage     String    @default("en")
+  status            String    @default("WAITING")
+  requestDate       DateTime  @default(now())
+  employeeId        String?
+  availableAt       DateTime?
+  contactedAt       DateTime?
   contactEmployeeId String?
-  completedAt      DateTime?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  completedAt       DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  store          Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  customer       Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  product        Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
-  variant        ProductVariant?  @relation(fields: [variantId], references: [id], onDelete: SetNull)
-  employee       User?            @relation("RequestEmployee", fields: [employeeId], references: [id], onDelete: SetNull)
-  contactEmployee User?           @relation("ContactEmployee", fields: [contactEmployeeId], references: [id], onDelete: SetNull)
-  matches        ArrivalMatch[]
-  sale           Sale?
+  store                     Store                      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  customer                  Customer                   @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  product                   Product?                   @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant                   ProductVariant?            @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  employee                  User?                      @relation("RequestEmployee", fields: [employeeId], references: [id], onDelete: SetNull)
+  contactEmployee           User?                      @relation("ContactEmployee", fields: [contactEmployeeId], references: [id], onDelete: SetNull)
+  matches                   ArrivalMatch[]
+  sale                      Sale?
+  arrivalEmailNotifications ArrivalEmailNotification[]
 
   @@unique([storeId, requestNumber])
   @@index([storeId, status])
@@ -198,9 +205,10 @@ model StockArrival {
   employeeId    String?
   createdAt     DateTime @default(now())
 
-  store    Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  employee User?              @relation(fields: [employeeId], references: [id], onDelete: SetNull)
-  items    StockArrivalItem[]
+  store                     Store                      @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  employee                  User?                      @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  items                     StockArrivalItem[]
+  arrivalEmailNotifications ArrivalEmailNotification[]
 
   @@unique([storeId, arrivalNumber])
   @@index([storeId, arrivalDate])
@@ -218,9 +226,10 @@ model StockArrivalItem {
   unitCost    Float?
   createdAt   DateTime @default(now())
 
-  arrival StockArrival   @relation(fields: [arrivalId], references: [id], onDelete: Cascade)
-  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
-  matches ArrivalMatch[]
+  arrival                   StockArrival               @relation(fields: [arrivalId], references: [id], onDelete: Cascade)
+  variant                   ProductVariant             @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  matches                   ArrivalMatch[]
+  arrivalEmailNotifications ArrivalEmailNotification[]
 
   @@index([arrivalId])
 }
@@ -232,11 +241,51 @@ model ArrivalMatch {
   createdAt     DateTime @default(now())
 
   arrivalItem StockArrivalItem @relation(fields: [arrivalItemId], references: [id], onDelete: Cascade)
-  request      CustomerRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  request     CustomerRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
 
   // A request can only ever be matched once — the core anti-duplication guard.
   @@unique([requestId])
   @@unique([arrivalItemId, requestId])
+}
+
+/// Transactional outbox for arrival-triggered customer emails. One row per
+/// (arrival, request) pair; created inside the matching transaction and sent
+/// only after that transaction commits.
+model ArrivalEmailNotification {
+  id                String    @id @default(uuid())
+  storeId           String
+  arrivalId         String
+  arrivalItemId     String
+  requestId         String
+  // Snapshots: the email must not depend on later edits to request/customer data.
+  customerName      String
+  recipientEmail    String
+  emailLanguage     String    @default("en") // en | ru
+  productName       String
+  sku               String
+  size              String
+  color             String
+  quantity          Int
+  status            String    @default("PENDING") // PENDING | SENT | FAILED
+  providerMessageId String?
+  error             String?
+  attempts          Int       @default(0)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  sentAt            DateTime?
+  lastAttemptAt     DateTime?
+
+  store       Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  arrival     StockArrival     @relation(fields: [arrivalId], references: [id], onDelete: Cascade)
+  arrivalItem StockArrivalItem @relation(fields: [arrivalItemId], references: [id], onDelete: Cascade)
+  request     CustomerRequest  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  // Database-level idempotency: the same request can never receive a second
+  // notification for the same arrival, even under concurrent/retried events.
+  @@unique([arrivalId, requestId])
+  @@index([storeId, createdAt])
+  @@index([storeId, status])
+  @@index([requestId])
 }
 
 model Notification {
@@ -269,11 +318,11 @@ model Sale {
   soldAt     DateTime @default(now())
   createdAt  DateTime @default(now())
 
-  store    Store          @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  variant  ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
-  customer Customer       @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  store    Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  variant  ProductVariant   @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  customer Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
   request  CustomerRequest? @relation(fields: [requestId], references: [id], onDelete: SetNull)
-  employee User?          @relation(fields: [employeeId], references: [id], onDelete: SetNull)
+  employee User?            @relation(fields: [employeeId], references: [id], onDelete: SetNull)
 
   @@index([storeId, soldAt])
 }
@@ -356,9 +405,9 @@ model Subscription {
   createdAt              DateTime  @default(now())
   updatedAt              DateTime  @updatedAt
 
-  store               Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  user                User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plan                SubscriptionPlan    @relation(fields: [planId], references: [id], onDelete: Restrict)
+  store               Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user                User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan                SubscriptionPlan     @relation(fields: [planId], references: [id], onDelete: Restrict)
   paymentTransactions PaymentTransaction[]
 
   // One subscription per user and plan. The store is part of the key so a user
@@ -386,10 +435,10 @@ model PaymentTransaction {
   updatedAt         DateTime  @updatedAt
   completedAt       DateTime?
 
-  store        Store               @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  subscription Subscription         @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
-  plan         SubscriptionPlan    @relation(fields: [planId], references: [id], onDelete: Restrict)
-  user         User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store        Store            @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  subscription Subscription     @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  plan         SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+  user         User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   events       PaymentEvent[]
 
   @@index([storeId, createdAt])

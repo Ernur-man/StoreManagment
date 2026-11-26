@@ -4,6 +4,7 @@ import { requireAuth, requirePermission } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
 import { arrivalSchema } from '../lib/validation.js';
 import { registerArrival } from '../services/matching.js';
+import { dispatchArrivalEmails } from '../services/arrivalEmail.js';
 import { requireProAccess } from '../lib/subscription.js';
 import { resolveStoreEmployeeId } from '../lib/tenant.js';
 
@@ -74,6 +75,13 @@ router.post(
       return;
     }
     const result = await registerArrival({ ...input, employeeId }, user);
+    // Email is post-commit only. The dispatcher persists failures and never
+    // throws into the arrival response.
+    try {
+      await dispatchArrivalEmails(result.emailNotificationIds ?? []);
+    } catch (error) {
+      console.error('[WishStock] arrival email dispatch error', error);
+    }
     res.status(201).json(result);
   }),
 );

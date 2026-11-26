@@ -31,10 +31,14 @@ Do not run `npm run db:seed` against a database that contains data you need to k
 | `PAYMENT_PROVIDER` | `demo` locally, `stripe` for a real integration | Demo works in production only as an explicitly labelled simulation; keep `demo` if no real provider is configured |
 | `PAYMENT_DEMO_WEBHOOK_SECRET` | HMAC secret for demo webhooks | Required for demo webhooks in production; use a dedicated value |
 | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | Stripe credentials | Required only for `PAYMENT_PROVIDER=stripe` |
+| `RESEND_API_KEY` | Server-only Resend sending key | Obtain at resend.com/api-keys; omit locally to disable email |
+| `RESEND_FROM_EMAIL` | Verified sender address | Use a domain verified at resend.com/domains, e.g. `WishStock <notifications@yourdomain.com>` |
 | `CLIENT_ORIGIN` | Optional CORS allowlist | Only needed for external credentialed API clients |
 | `COOKIE_SECURE` | Optional escape hatch | Normally unset; cookies are `Secure` in production |
 
 See `.env.example` for URL formats. Never commit real credentials; `.env` is gitignored.
+
+For Resend, add `RESEND_API_KEY` and `RESEND_FROM_EMAIL` to Vercel Development, Preview **and** Production environments (and to local `.env` for local sends). Verify the sender domain and its DNS records in the Resend dashboard first. Missing variables leave arrivals working and notifications `PENDING`; see the README for the full Resend setup steps.
 
 ## Database tasks
 

@@ -72,6 +72,8 @@ export interface CustomerRequest {
   color: string;
   source: string;
   notes?: string | null;
+  email?: string | null;
+  emailLanguage?: 'en' | 'ru' | string;
   status: RequestStatus;
   requestDate: string;
   availableAt?: string | null;
@@ -109,6 +111,24 @@ export interface Arrival {
   createdAt: string;
   employee?: { id: string; name: string } | null;
   items: ArrivalItem[];
+}
+
+export interface ArrivalEmailNotification {
+  id: string;
+  requestId: string;
+  customerName: string;
+  recipientEmail: string;
+  productName: string;
+  sku: string;
+  size: string;
+  color: string;
+  status: 'PENDING' | 'SENT' | 'FAILED' | string;
+  providerMessageId?: string | null;
+  error?: string | null;
+  attempts: number;
+  createdAt: string;
+  sentAt?: string | null;
+  lastAttemptAt?: string | null;
 }
 
 export interface AppNotification {

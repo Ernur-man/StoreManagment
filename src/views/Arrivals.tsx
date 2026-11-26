@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
-import { PackageCheck, Plus, Phone, MessageCircle, Sparkles, Lightbulb, ArrowRight } from 'lucide-react';
+import { PackageCheck, Plus, Phone, MessageCircle, Sparkles, Lightbulb, ArrowRight, Mail, RefreshCw } from 'lucide-react';
 import { api } from '../lib/api';
 import { useI18n } from '../i18n';
-import { Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Textarea, Badge } from '../components/ui';
+import { Button, Card, EmptyState, Field, Input, Modal, PageHeader, Select, Table, TableWrap, Textarea, Badge } from '../components/ui';
 import { isoDate, phoneHref, whatsappHref } from '../lib/utils';
 import { can } from '../lib/shared';
 import { toast } from '../store/toast';
 import { useAuthStore } from '../store/auth';
-import type { Arrival, AuthUser } from '../lib/types';
+import type { Arrival, ArrivalEmailNotification, AuthUser } from '../lib/types';
 
 interface ArrivalForm {
   sku: string;
@@ -26,14 +26,18 @@ interface MatchResult {
   matchedRequests: Array<{ id: string; requestNumber: string; customerName: string; phone: string }>;
   quantityBefore: number;
   quantityAfter: number;
+  emailNotificationIds?: string[];
 }
 
 export function Arrivals() {
   const { t, td, formatDate, error: translateError } = useI18n();
   const currentUser = useAuthStore((state) => state.user);
   const canWrite = can(currentUser?.role, 'arrivals:write');
+  const canRetryEmail = can(currentUser?.role, 'notifications:write');
   const [arrivals, setArrivals] = useState<Arrival[]>([]);
   const [users, setUsers] = useState<AuthUser[]>([]);
+  const [emailNotifications, setEmailNotifications] = useState<ArrivalEmailNotification[]>([]);
+  const [retryingEmailId, setRetryingEmailId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
@@ -45,12 +49,20 @@ export function Arrivals() {
     supplier: '', notes: '', arrivalDate: isoDate(new Date()), employeeId: currentUser?.id ?? '',
   });
 
+  const loadEmailHistory = useCallback(async () => {
+    try {
+      const data = await api.get<{ notifications: ArrivalEmailNotification[] }>('/notifications/emails');
+      setEmailNotifications(data.notifications);
+    } catch { /* email history is optional for the arrivals workflow */ }
+  }, []);
+
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const data = await api.get<{ arrivals: Arrival[] }>('/arrivals');
       setArrivals(data.arrivals);
       setLoadError(null);
+      await loadEmailHistory();
       try {
         const usersData = await api.get<{ users: AuthUser[] }>('/settings/users');
         setUsers(usersData.users);
@@ -62,7 +74,7 @@ export function Arrivals() {
     } finally {
       setLoading(false);
     }
-  }, [translateError]);
+  }, [translateError, loadEmailHistory]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -89,14 +101,32 @@ export function Arrivals() {
       setResult(data);
       setFormOpen(false);
       setForm({ ...form, sku: '', productName: '', size: '', color: '', quantity: '1', notes: '', supplier: '' });
-      toast.success(data.matchedRequests.length > 0
+      const queued = data.emailNotificationIds?.length ?? 0;
+      toast.success((data.matchedRequests.length > 0
         ? t('arrivals.successMatched', { count: data.matchedRequests.length })
-        : t('arrivals.successNoMatch'));
+        : t('arrivals.successNoMatch')) + (queued > 0 ? ` ${t('arrivals.emailQueued')}` : ''));
       await load();
     } catch (err) {
       toast.error(translateError((err as Error).message));
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function retryEmail(id: string) {
+    if (!canRetryEmail) {
+      toast.error(t('auth.errors.forbidden'));
+      return;
+    }
+    setRetryingEmailId(id);
+    try {
+      await api.post(`/notifications/emails/${id}/retry`);
+      toast.success(t('common.saved'));
+      await loadEmailHistory();
+    } catch (err) {
+      toast.error(translateError((err as Error).message));
+    } finally {
+      setRetryingEmailId(null);
     }
   }
 
@@ -167,6 +197,50 @@ export function Arrivals() {
           </div>
         </Card>
       </div>
+
+      {/* Customer email outbox history */}
+      <Card className="mt-5 overflow-hidden">
+        <div className="flex items-center gap-2 px-5 pt-5">
+          <Mail className="h-4 w-4 text-indigo-500" />
+          <div>
+            <h2 className="font-bold text-slate-900">{t('arrivals.emailHistory')}</h2>
+            <p className="mt-0.5 text-xs text-slate-500">{t('arrivals.emailHistorySub')}</p>
+          </div>
+          <Badge className="ml-auto bg-slate-100 text-slate-600">{emailNotifications.length}</Badge>
+        </div>
+        {emailNotifications.length === 0 ? (
+          <div className="p-5"><EmptyState icon={<Mail className="h-5 w-5" />} title={t('arrivals.noEmailNotifications')} /></div>
+        ) : (
+          <TableWrap>
+            <Table headers={[
+              t('arrivals.emailCustomer'), t('arrivals.emailAddress'), t('arrivals.emailProduct'),
+              t('arrivals.emailStatus'), t('arrivals.emailSentAt'), t('common.actions'),
+            ]}>
+              {emailNotifications.map((notification) => (
+                <tr key={notification.id} className="hover:bg-slate-50/60">
+                  <td className="whitespace-nowrap px-4 py-3 text-sm font-medium text-slate-700">{notification.customerName}</td>
+                  <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-600">{notification.recipientEmail}</td>
+                  <td className="px-4 py-3 text-xs text-slate-600">{td(notification.productName)} <span className="text-slate-400">· {notification.sku} · {notification.size} / {td(notification.color)}</span></td>
+                  <td className="px-4 py-3">
+                    <Badge className={notification.status === 'SENT' ? 'bg-emerald-50 text-emerald-700' : notification.status === 'FAILED' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}>
+                      {notification.status === 'SENT' ? t('emailStatus.SENT') : notification.status === 'FAILED' ? t('emailStatus.FAILED') : t('emailStatus.PENDING')}
+                    </Badge>
+                    {notification.error && <p className="mt-1 max-w-xs truncate text-[11px] text-red-600" title={notification.error}>{t('arrivals.emailError')}: {notification.error}</p>}
+                  </td>
+                  <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500">{notification.sentAt ? formatDate(notification.sentAt, true) : '—'}</td>
+                  <td className="px-4 py-3">
+                    {canRetryEmail && notification.status !== 'SENT' && (
+                      <Button size="sm" onClick={() => void retryEmail(notification.id)} disabled={retryingEmailId === notification.id} icon={<RefreshCw className="h-3.5 w-3.5" />}>
+                        {retryingEmailId === notification.id ? t('common.loading') : t('arrivals.retryEmail')}
+                      </Button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </Table>
+          </TableWrap>
+        )}
+      </Card>
 
       {/* Arrival form */}
       <Modal open={formOpen} onClose={() => setFormOpen(false)} title={t('arrivals.newArrival')} subtitle={t('requests.matchHint')}

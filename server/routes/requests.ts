@@ -2,7 +2,7 @@ import { Router } from '../lib/router.js';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth, requirePermission } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
-import { requestSchema, requestStatusSchema } from '../lib/validation.js';
+import { normalizeRequestEmail, requestSchema, requestStatusSchema } from '../lib/validation.js';
 import { normalize, normalizePhone } from '../lib/normalize.js';
 import { generateNumber, writeAudit } from '../lib/audit.js';
 import { REQUEST_STATUSES, type RequestStatus } from '../lib/constants.js';
@@ -176,6 +176,8 @@ router.post(
         color: data.color,
         source: data.source,
         notes: data.notes || null,
+        email: normalizeRequestEmail(data.email),
+        emailLanguage: data.emailLanguage ?? 'en',
         status: 'WAITING',
         requestDate: data.requestDate ?? new Date(),
         employeeId,
@@ -223,6 +225,8 @@ router.patch(
         color: data.color,
         source: data.source,
         notes: data.notes || null,
+        email: data.email === undefined ? existing.email : normalizeRequestEmail(data.email),
+        emailLanguage: data.emailLanguage ?? existing.emailLanguage ?? 'en',
         requestDate: data.requestDate ?? existing.requestDate,
       },
       include,

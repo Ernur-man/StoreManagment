@@ -11,6 +11,14 @@ import {
 const text = (max = 200) => z.string().trim().min(1).max(max);
 const optionalText = (max = 1000) => z.string().trim().max(max).optional().nullable();
 const date = z.coerce.date();
+const optionalEmail = z.union([z.string().trim().email().max(150), z.literal('')]).optional().nullable();
+
+/** Returns a normalized address only when it is a valid optional request email. */
+export function normalizeRequestEmail(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  return z.string().email().max(150).safeParse(normalized).success ? normalized : null;
+}
 
 export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(150),
@@ -52,6 +60,8 @@ export const requestSchema = z.object({
   color: text(40),
   source: z.enum(REQUEST_SOURCES).optional().default('IN_STORE'),
   notes: optionalText(1000),
+  email: optionalEmail,
+  emailLanguage: z.enum(['en', 'ru']).optional().default('en'),
   requestDate: date.optional(),
   employeeId: z.string().optional().nullable(),
 });

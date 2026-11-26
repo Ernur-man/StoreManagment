@@ -25,10 +25,12 @@ interface RequestForm {
   source: string;
   requestDate: string;
   notes: string;
+  email: string;
+  emailLanguage: 'en' | 'ru';
 }
 const emptyForm = (): RequestForm => ({
   customerName: '', phone: '', productName: '', sku: '', category: '', size: '', color: '',
-  source: 'IN_STORE', requestDate: isoDate(new Date()), notes: '',
+  source: 'IN_STORE', requestDate: isoDate(new Date()), notes: '', email: '', emailLanguage: 'en',
 });
 
 export function Requests() {
@@ -89,6 +91,7 @@ export function Requests() {
         customerName: request.customer.name, phone: request.customer.phone, productName: request.productName,
         sku: request.sku, category: request.category ?? '', size: request.size, color: request.color,
         source: request.source, requestDate: request.requestDate ? isoDate(request.requestDate) : isoDate(new Date()), notes: request.notes ?? '',
+        email: request.email ?? '', emailLanguage: request.emailLanguage === 'ru' ? 'ru' : 'en',
       });
     } else {
       setEditing(null);
@@ -105,6 +108,8 @@ export function Requests() {
         ...form,
         category: form.category || null,
         notes: form.notes || null,
+        email: form.email.trim() || null,
+        emailLanguage: form.emailLanguage,
         requestDate: form.requestDate ? new Date(`${form.requestDate}T12:00:00`).toISOString() : new Date().toISOString(),
       };
       if (editing) await api.patch(`/requests/${editing.id}`, payload);
@@ -261,6 +266,8 @@ export function Requests() {
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label={`${t('requests.customerName')} *`}><Input required value={form.customerName} onChange={(e) => setForm({ ...form, customerName: e.target.value })} /></Field>
             <Field label={`${t('requests.customerPhone')} *`} hint={t('customers.phoneHint')}><Input required type="tel" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></Field>
+            <Field label={`${t('common.email')} (${t('common.optional')})`} hint={t('requests.emailHint')}><Input type="email" autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></Field>
+            <Field label={t('requests.emailLanguage')}><Select value={form.emailLanguage} onChange={(e) => setForm({ ...form, emailLanguage: e.target.value === 'ru' ? 'ru' : 'en' })}><option value="en">English</option><option value="ru">Русский</option></Select></Field>
             <Field label={`${t('requests.productName')} *`}><Input required value={form.productName} onChange={(e) => setForm({ ...form, productName: e.target.value })} /></Field>
             <Field label={`${t('common.sku')} *`}><Input required value={form.sku} onChange={(e) => setForm({ ...form, sku: e.target.value })} /></Field>
             <Field label={t('common.category')}><Input value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })} /></Field>
@@ -293,6 +300,8 @@ export function Requests() {
               <p><span className="text-slate-400">{t('common.color')}:</span> <span className="font-semibold">{td(viewing.color)}</span></p>
               <p><span className="text-slate-400">{t('requests.customerName')}:</span> <span className="font-semibold">{viewing.customer.name}</span></p>
               <p><span className="text-slate-400">{t('requests.customerPhone')}:</span> <span className="font-semibold">{viewing.customer.phone}</span></p>
+              <p><span className="text-slate-400">{t('common.email')}:</span> <span className="font-semibold">{viewing.email || '—'}</span></p>
+              {viewing.email && <p><span className="text-slate-400">{t('requests.emailLanguage')}:</span> <span className="font-semibold">{viewing.emailLanguage === 'ru' ? 'Русский' : 'English'}</span></p>}
               <p><span className="text-slate-400">{t('requests.requestSource')}:</span> <span className="font-semibold">{t(`source.${viewing.source}` as TranslationKey)}</span></p>
               <p><span className="text-slate-400">{t('common.employee')}:</span> <span className="font-semibold">{viewing.employee?.name ?? '—'}</span></p>
               {viewing.notes && <p className="sm:col-span-2"><span className="text-slate-400">{t('common.notes')}:</span> {viewing.notes}</p>}

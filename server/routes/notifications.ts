@@ -1,12 +1,20 @@
 import { Router } from '../lib/router.js';
 import { prisma } from '../lib/prisma.js';
-import { requireAuth } from '../lib/auth.js';
+import { requireAuth, requirePermission } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
 import { requireProAccess } from '../lib/subscription.js';
+import { createRateLimiter } from '../lib/rateLimit.js';
+import { listArrivalEmailNotifications, retryArrivalEmailNotification } from '../services/arrivalEmail.js';
 
 const router = new Router();
 router.use(requireAuth);
 router.use(asyncRoute(requireProAccess));
+
+const emailRetryLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  message: { error: 'RATE_LIMITED', message: 'notifications.errors.rateLimited' },
+});
 
 router.get(
   '/',
@@ -58,6 +66,35 @@ router.patch(
       return;
     }
     res.json({ ok: true });
+  }),
+);
+
+// Outbox history and controlled retry. There is deliberately no arbitrary
+// "send email" endpoint: only existing, non-sent outbox rows can be retried.
+router.get(
+  '/emails',
+  requirePermission('notifications:read'),
+  asyncRoute(async (req, res) => {
+    const notifications = await listArrivalEmailNotifications(req.authUser!.storeId);
+    res.json({ notifications });
+  }),
+);
+
+router.post(
+  '/emails/:id/retry',
+  requirePermission('notifications:write'),
+  emailRetryLimiter,
+  asyncRoute(async (req, res) => {
+    const result = await retryArrivalEmailNotification(req.params.id, req.authUser!.storeId);
+    if (result.status === 'NOT_FOUND') {
+      res.status(404).json({ message: 'errors.notFound' });
+      return;
+    }
+    if (result.status === 'TERMINAL') {
+      res.status(409).json({ message: 'notifications.errors.notRetryable' });
+      return;
+    }
+    res.json({ ok: true, notification: result.notification });
   }),
 );
 

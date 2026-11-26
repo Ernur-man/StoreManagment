@@ -133,11 +133,25 @@ Set these in Vercel Project Settings → Environment Variables (or in a local `.
 | `PAYMENT_PROVIDER` | `demo` for the labelled test mode (also in production); `stripe` only with a real merchant account |
 | `PAYMENT_DEMO_WEBHOOK_SECRET` | Required for signed demo webhooks in production; use a dedicated secret, not `JWT_SECRET` |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Required when `PAYMENT_PROVIDER=stripe` |
+| `RESEND_API_KEY` | Server-only sending key for arrival notifications; omit to disable email without affecting arrivals |
+| `RESEND_FROM_EMAIL` | Verified sender address, e.g. `WishStock <notifications@yourdomain.com>`; omit to disable email |
 | `CLIENT_ORIGIN` | Optional comma-separated CORS allowlist for credentialed external API clients |
 | `COOKIE_SECURE` | Optional; cookies are already `Secure` when `NODE_ENV=production` |
 | `SQLITE_PATH` | Optional local source path for `npm run db:transfer` (defaults to `prisma/dev.db`) |
 
 Keep real credentials in environment variables only. `.env` is gitignored and must never be committed.
+
+### Arrival email notifications (Resend)
+
+WishStock uses the official `resend` Node.js SDK **only in Next.js backend code**. The browser never receives the API key and cannot choose the sender or send arbitrary emails.
+
+1. Create an API key at [resend.com/api-keys](https://resend.com/api-keys) with sending permission. Copy it into `RESEND_API_KEY`.
+2. Verify a sending domain at [resend.com/domains](https://resend.com/domains). Resend issues DNS records (typically SPF and DKIM, and sometimes a DMARC/return-path record — use the exact records shown in your Resend dashboard). Add those records at your DNS provider and wait for Resend to show the domain as verified.
+3. Set `RESEND_FROM_EMAIL` to an address on that verified domain, for example `WishStock <notifications@yourdomain.com>`. For initial testing, `onboarding@resend.dev` is allowed by Resend only when sending to the account owner's verified email; switch to your own verified domain before notifying customers.
+4. In Vercel, add **both** variables to Project Settings → Environment Variables for **Development, Preview and Production** (all environments where matching arrivals should send email). This repository does not modify production environment variables automatically.
+5. If either variable is missing or invalid, email sending is skipped and notification rows stay `PENDING`; stock arrivals, matching and inventory remain unchanged. Failed deliveries are stored as `FAILED` on the outbox row and can be retried from Stock Arrivals → Customer email history by an authorized user.
+
+Email is queued only for a customer request that has its own valid email address, and only after a `WAITING` request is successfully matched to a new arrival. Delivery is idempotent per `(arrival, request)` via a database unique index and a stable Resend idempotency key, so refreshes and duplicate events never resend a delivered notification.
 
 ## Deploy to Vercel
 

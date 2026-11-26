@@ -2,6 +2,7 @@ import { prisma } from '../lib/prisma.js';
 import { matchesVariant, normalize } from '../lib/normalize.js';
 import { generateNumber, writeAudit } from '../lib/audit.js';
 import type { AuthUser } from '../lib/auth.js';
+import { queueArrivalEmailNotifications } from './arrivalEmail.js';
 
 export interface RegisterArrivalInput {
   sku: string;
@@ -147,6 +148,8 @@ export async function registerArrival(input: RegisterArrivalInput, user: AuthUse
       requestNumber: string;
       customerName: string;
       phone: string;
+      email: string | null;
+      emailLanguage: string | null;
     }> = [];
 
     const eligible: typeof candidates = [];
@@ -187,6 +190,8 @@ export async function registerArrival(input: RegisterArrivalInput, user: AuthUse
           requestNumber: request.requestNumber,
           customerName: request.customer.name,
           phone: request.customer.phone,
+          email: request.email,
+          emailLanguage: request.emailLanguage,
         });
       }
     }
@@ -208,6 +213,23 @@ export async function registerArrival(input: RegisterArrivalInput, user: AuthUse
         },
       });
     }
+
+    // Outbox rows are written inside the same transaction as the match. Email
+    // delivery happens only after this transaction commits (see arrivals route).
+    const emailNotificationIds = await queueArrivalEmailNotifications(
+      tx,
+      {
+        storeId: user.storeId,
+        arrivalId: arrival.id,
+        arrivalItemId: item.id,
+        productName: input.productName,
+        sku: input.sku,
+        size: input.size,
+        color: input.color,
+        quantity: input.quantity,
+      },
+      matchedRequests,
+    );
 
     await writeAudit(
       tx,
@@ -237,6 +259,7 @@ export async function registerArrival(input: RegisterArrivalInput, user: AuthUse
       quantityBefore: inventoryBefore?.quantity ?? 0,
       quantityAfter: inventory.quantity,
       matchedRequests,
+      emailNotificationIds,
     };
   });
 }
