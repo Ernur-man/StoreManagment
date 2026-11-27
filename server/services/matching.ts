@@ -4,6 +4,15 @@ import { generateNumber, writeAudit } from '../lib/audit.js';
 import type { AuthUser } from '../lib/auth.js';
 import { queueArrivalEmailNotifications } from './arrivalEmail.js';
 
+/**
+ * Interactive transactions on a pooled Neon connection can exceed Prisma's
+ * 5s default timeout. Keep the transaction interactive (atomic arrival +
+ * matching), but give it enough headroom; the query batching below keeps the
+ * callback short in the common case.
+ */
+const ARRIVAL_TRANSACTION_MAX_WAIT_MS = 10_000;
+const ARRIVAL_TRANSACTION_TIMEOUT_MS = 30_000;
+
 export interface RegisterArrivalInput {
   sku: string;
   productName: string;
@@ -152,14 +161,23 @@ export async function registerArrival(input: RegisterArrivalInput, user: AuthUse
       emailLanguage: string | null;
     }> = [];
 
+    // Re-check inside the transaction so a concurrent arrival cannot match
+    // twice. One batched query replaces one round-trip per candidate, which
+    // is what pushed the old callback past Prisma's 5s default timeout.
+    const candidateIds = candidates.map((request) => request.id);
     const eligible: typeof candidates = [];
-    for (const request of candidates) {
-      // Re-check inside the transaction so a concurrent arrival cannot match twice.
-      const stillEligible = await tx.customerRequest.findFirst({
-        where: { id: request.id, status: 'WAITING', matches: { none: {} } },
+    if (candidateIds.length > 0) {
+      const stillEligible = await tx.customerRequest.findMany({
+        where: {
+          id: { in: candidateIds },
+          storeId: user.storeId,
+          status: 'WAITING',
+          matches: { none: {} },
+        },
         select: { id: true },
       });
-      if (stillEligible) eligible.push(request);
+      const eligibleIds = new Set(stillEligible.map((request) => request.id));
+      eligible.push(...candidates.filter((request) => eligibleIds.has(request.id)));
     }
 
     if (eligible.length > 0) {
@@ -174,10 +192,14 @@ export async function registerArrival(input: RegisterArrivalInput, user: AuthUse
         select: { requestId: true },
       });
       const insertedIds = new Set(inserted.map((match) => match.requestId));
-      for (const request of eligible) {
-        if (!insertedIds.has(request.id)) continue;
-        await tx.customerRequest.update({
-          where: { id: request.id },
+      const matchedIds = eligible
+        .filter((request) => insertedIds.has(request.id))
+        .map((request) => request.id);
+      if (matchedIds.length > 0) {
+        // Same status change as the old per-request loop, without one
+        // round-trip per matched request.
+        await tx.customerRequest.updateMany({
+          where: { id: { in: matchedIds }, storeId: user.storeId },
           data: {
             status: 'AVAILABLE',
             availableAt: new Date(),
@@ -185,6 +207,9 @@ export async function registerArrival(input: RegisterArrivalInput, user: AuthUse
             variantId: variant.id,
           },
         });
+      }
+      for (const request of eligible) {
+        if (!insertedIds.has(request.id)) continue;
         matchedRequests.push({
           id: request.id,
           requestNumber: request.requestNumber,
@@ -261,5 +286,8 @@ export async function registerArrival(input: RegisterArrivalInput, user: AuthUse
       matchedRequests,
       emailNotificationIds,
     };
+  }, {
+    maxWait: ARRIVAL_TRANSACTION_MAX_WAIT_MS,
+    timeout: ARRIVAL_TRANSACTION_TIMEOUT_MS,
   });
 }

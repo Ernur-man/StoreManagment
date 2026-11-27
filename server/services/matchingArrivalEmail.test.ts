@@ -1,13 +1,46 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { registerArrival, type RegisterArrivalInput } from './matching.js';
 
-const state = vi.hoisted(() => ({
-  requests: [] as any[],
-  outboxRows: [] as any[],
-  customerUpdates: [] as any[],
-  matchCreateMany: vi.fn(),
-  notificationCreate: vi.fn(),
-}));
+const state = vi.hoisted(() => {
+  const s: {
+    requests: any[];
+    outboxRows: any[];
+    customerUpdates: any[];
+    matchCreateMany: any;
+    notificationCreate: any;
+    elapsedMs: number;
+    transactionOptions: { maxWait?: number; timeout?: number } | null;
+    p2028Errors: string[];
+    tick: (operation: string) => void;
+  } = {
+    requests: [],
+    outboxRows: [] as any[],
+    customerUpdates: [] as any[],
+    matchCreateMany: vi.fn(),
+    notificationCreate: vi.fn(),
+    elapsedMs: 0,
+    transactionOptions: null as { maxWait?: number; timeout?: number } | null,
+    p2028Errors: [] as string[],
+    tick: () => {},
+  };
+
+  // Each model call is one round-trip. Prisma closes an interactive transaction
+  // at its default 5s timeout; every later query on tx then fails with P2028.
+  s.tick = (operation: string) => {
+    s.elapsedMs += 100;
+    const timeout = s.transactionOptions?.timeout ?? 5_000;
+    if (operation === 'arrivalMatch.findMany' && s.elapsedMs > timeout) {
+      s.p2028Errors.push(operation);
+      const error = new Error(
+        "Transaction API error: Transaction not found. Transaction ID is invalid, refers to an old closed transaction Prisma doesn't have information about anymore.",
+      ) as Error & { code: string };
+      error.code = 'P2028';
+      throw error;
+    }
+  };
+
+  return s;
+});
 
 vi.mock('resend', () => ({ Resend: vi.fn() }));
 
@@ -34,7 +67,19 @@ vi.mock('../lib/prisma.js', () => {
       upsert: async (args: any) => ({ quantity: args.create.quantity }),
     },
     customerRequest: {
-      findMany: async ({ where }: any) => state.requests.filter((request) => request.status === where.status),
+      findMany: async ({ where }: any) => {
+        if (where?.id?.in) {
+          return state.requests
+            .filter(
+              (request) =>
+                where.id.in.includes(request.id) &&
+                request.status === 'WAITING' &&
+                request.matches.length === 0,
+            )
+            .map((request) => ({ id: request.id }));
+        }
+        return state.requests.filter((request) => request.status === where.status);
+      },
       findFirst: async ({ where }: any) => {
         const request = state.requests.find((candidate) => candidate.id === where.id);
         return request && request.status === 'WAITING' && request.matches.length === 0 ? { id: request.id } : null;
@@ -42,6 +87,16 @@ vi.mock('../lib/prisma.js', () => {
       update: async ({ where, data }: any) => {
         state.customerUpdates.push({ id: where.id, data });
         return { id: where.id, ...data };
+      },
+      updateMany: async ({ where, data }: any) => {
+        const ids: string[] = where.id?.in ?? (where.id ? [where.id] : []);
+        for (const id of ids) {
+          const request = state.requests.find((candidate) => candidate.id === id);
+          if (!request) continue;
+          state.customerUpdates.push({ id, data });
+          Object.assign(request, data);
+        }
+        return { count: ids.length };
       },
     },
     stockArrival: {
@@ -72,7 +127,29 @@ vi.mock('../lib/prisma.js', () => {
       findMany: async () => state.outboxRows.map((row) => ({ id: row.id })),
     },
   };
-  return { prisma: { $transaction: async (callback: any) => callback(tx) } };
+
+  for (const [model, methods] of Object.entries(tx) as Array<[string, Record<string, any>]>) {
+    for (const [method, query] of Object.entries(methods)) {
+      methods[method] = async (...args: any[]) => {
+        state.tick(`${model}.${method}`);
+        return query(...args);
+      };
+    }
+  }
+
+  return {
+    prisma: {
+      $transaction: async (
+        callback: any,
+        options?: { maxWait?: number; timeout?: number },
+      ) => {
+        state.transactionOptions = options ?? null;
+        state.elapsedMs = 0;
+        state.p2028Errors = [];
+        return callback(tx);
+      },
+    },
+  };
 });
 
 const user = {
@@ -112,6 +189,9 @@ beforeEach(() => {
   state.requests = [];
   state.outboxRows = [];
   state.customerUpdates = [];
+  state.elapsedMs = 0;
+  state.transactionOptions = null;
+  state.p2028Errors = [];
   state.matchCreateMany.mockClear();
   state.notificationCreate.mockClear();
 });
@@ -158,5 +238,34 @@ describe('matching triggers arrival emails', () => {
     expect(state.notificationCreate).not.toHaveBeenCalled();
     expect(state.customerUpdates).toEqual([]);
     expect(state.outboxRows).toEqual([]);
+  });
+});
+
+describe('arrival transaction timeout regression (P2028)', () => {
+  it('keeps the interactive transaction open past Prisma\'s default 5s timeout', async () => {
+    // Old code: 11 setup queries + 38 per-request re-checks + createMany put
+    // arrivalMatch.findMany at 5100ms, after Prisma's 5s default timeout.
+    // Batched re-checks plus explicit options keep the callback well below it.
+    const requestCount = 38;
+    state.requests = Array.from({ length: requestCount }, (_, index) =>
+      waitingRequest({
+        id: `req_${index + 1}`,
+        requestNumber: `REQ-${index + 1}`,
+        customer: {
+          id: `customer_${index + 1}`,
+          name: `Customer ${index + 1}`,
+          phone: `+1000${String(index + 1).padStart(7, '0')}`,
+        },
+        email: `customer${index + 1}@example.com`,
+      }),
+    );
+
+    const result = await registerArrival(input, user);
+
+    expect(state.transactionOptions).toMatchObject({ maxWait: 10_000, timeout: 30_000 });
+    expect(state.p2028Errors).toEqual([]);
+    expect(result.matchedRequests).toHaveLength(requestCount);
+    expect(state.customerUpdates).toHaveLength(requestCount);
+    expect(state.outboxRows).toHaveLength(requestCount);
   });
 });
