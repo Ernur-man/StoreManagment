@@ -9,10 +9,11 @@ import {
 import { addDays, subscriptionView } from '../lib/subscription.js';
 import { prisma } from '../lib/prisma.js';
 import {
+  PAYMENTS_UNAVAILABLE_KEY,
   PaymentConfigurationError,
   PaymentVerificationError,
-  configuredProvider,
   createCheckout,
+  paymentReadiness,
   resolveAppOrigin,
   type AppOriginRequest,
   type NormalizedPaymentEvent,
@@ -20,7 +21,13 @@ import {
 
 export async function getPlan() {
   const plan = await prisma.subscriptionPlan.findUnique({ where: { code: SUBSCRIPTION_PLAN_CODE } });
-  if (!plan) throw new PaymentConfigurationError('Subscription plan has not been seeded');
+  if (!plan) {
+    throw new PaymentConfigurationError(
+      'Subscription plan has not been seeded',
+      PAYMENTS_UNAVAILABLE_KEY,
+      'PLAN_NOT_SEEDED',
+    );
+  }
   return plan;
 }
 
@@ -32,8 +39,9 @@ export async function getSubscriptionForUser(user: AuthUser) {
   });
 }
 
-export async function subscriptionResponse(user: AuthUser) {
+export async function subscriptionResponse(user: AuthUser, request?: AppOriginRequest) {
   const subscription = await getSubscriptionForUser(user);
+  const readiness = paymentReadiness(request);
   const payments = subscription
     ? await prisma.paymentTransaction.findMany({
         where: { subscriptionId: subscription.id },
@@ -53,9 +61,13 @@ export async function subscriptionResponse(user: AuthUser) {
     : [];
   const plan = subscription?.plan ?? (await getPlan());
   return {
-    // Everything returned here is a labelled demo simulation when the demo
-    // adapter is configured; no value in this response is a bank confirmation.
-    demo: configuredProvider() === 'demo',
+    // Readiness is derived from actual server configuration. `demo` is true
+    // only when the labelled demo adapter is fully configured and enabled.
+    demo: readiness.demo,
+    paymentsAvailable: readiness.available,
+    paymentProvider: readiness.provider,
+    paymentUnavailableReason: readiness.reasonCode,
+    paymentUnavailableKey: readiness.reasonKey,
     // The database stores features as JSON; the UI needs the parsed array.
     plan: { ...plan, features: JSON.parse(plan.features) as string[] },
     subscription: subscription
@@ -143,7 +155,13 @@ async function requestProviderCheckout(
 /** Creates a pending transaction and asks the provider for a hosted checkout page. */
 export async function startCheckout(user: AuthUser, provider: PaymentProviderName, request?: AppOriginRequest) {
   const plan = await getPlan();
-  if (!plan.isActive) throw new PaymentConfigurationError('This plan is not currently available');
+  if (!plan.isActive) {
+    throw new PaymentConfigurationError(
+      'This plan is not currently available',
+      'billing.errors.planUnavailable',
+      'PLAN_INACTIVE',
+    );
+  }
 
   const origin = resolveAppOrigin(request);
 

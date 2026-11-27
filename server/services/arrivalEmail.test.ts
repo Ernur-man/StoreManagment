@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { prisma } from '../lib/prisma.js';
 import {
   ARRIVAL_EMAIL_SUBJECT,
+  RESEND_CONFIG_ERROR,
   dispatchArrivalEmails,
   queueArrivalEmailNotifications,
   renderArrivalEmail,
@@ -230,7 +231,7 @@ describe('arrival email outbox', () => {
     expect(state.rows[0].error).toContain('invalid_api_key');
   });
 
-  it('skips sending and leaves rows pending when Resend is not configured', async () => {
+  it('persists a names-only diagnostic and leaves rows pending when Resend is not configured', async () => {
     delete process.env.RESEND_API_KEY;
     const ids = await queueArrivalEmailNotifications(prisma as any, context, [
       { id: 'req_1', customerName: 'Anna', email: 'anna@example.com' },
@@ -238,6 +239,34 @@ describe('arrival email outbox', () => {
     await dispatchArrivalEmails(ids);
     expect(state.send).not.toHaveBeenCalled();
     expect(state.rows[0].status).toBe('PENDING');
+    expect(state.rows[0].error).toBe(RESEND_CONFIG_ERROR);
+    expect(state.rows[0].error).not.toContain(process.env.RESEND_FROM_EMAIL ?? 'not-present');
+    expect(state.rows[0].attempts).toBe(0);
+  });
+
+  it('never marks SENT without a provider message ID', async () => {
+    state.send.mockResolvedValue({ data: {}, error: null });
+    const ids = await queueArrivalEmailNotifications(prisma as any, context, [
+      { id: 'req_1', customerName: 'Anna', email: 'anna@example.com' },
+    ]);
+    await dispatchArrivalEmails(ids);
+    expect(state.rows[0].status).toBe('FAILED');
+    expect(state.rows[0].error).toContain('RESEND_ACCEPTANCE_UNCONFIRMED');
+    expect(state.rows[0].providerMessageId).toBeNull();
+    expect(state.rows[0].sentAt).toBeNull();
+  });
+
+  it('reports UNAVAILABLE instead of success when retrying without Resend configuration', async () => {
+    delete process.env.RESEND_FROM_EMAIL;
+    const ids = await queueArrivalEmailNotifications(prisma as any, context, [
+      { id: 'req_1', customerName: 'Anna', email: 'anna@example.com' },
+    ]);
+    const retried = await retryArrivalEmailNotification(ids[0]!, context.storeId);
+    expect(retried).toMatchObject({ status: 'UNAVAILABLE', notification: null });
+    expect(state.send).not.toHaveBeenCalled();
+    expect(state.rows[0].status).toBe('PENDING');
+    expect(state.rows[0].error).toBe(RESEND_CONFIG_ERROR);
+    expect(state.rows[0].attempts).toBe(0);
   });
 
   it('retries a failed notification with the same idempotency key and blocks sent rows', async () => {

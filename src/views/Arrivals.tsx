@@ -225,6 +225,7 @@ export function Arrivals() {
                     <Badge className={notification.status === 'SENT' ? 'bg-emerald-50 text-emerald-700' : notification.status === 'FAILED' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-700'}>
                       {notification.status === 'SENT' ? t('emailStatus.SENT') : notification.status === 'FAILED' ? t('emailStatus.FAILED') : t('emailStatus.PENDING')}
                     </Badge>
+                    <p className="mt-1 text-[11px] text-slate-400">{t('arrivals.emailAttempts', { count: notification.attempts })}</p>
                     {notification.error && <p className="mt-1 max-w-xs truncate text-[11px] text-red-600" title={notification.error}>{t('arrivals.emailError')}: {notification.error}</p>}
                   </td>
                   <td className="whitespace-nowrap px-4 py-3 text-xs text-slate-500">{notification.sentAt ? formatDate(notification.sentAt, true) : '—'}</td>

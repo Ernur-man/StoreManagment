@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth, requirePermission } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
-import { settingsSchema, userSchema } from '../lib/validation.js';
+import { settingsSchema, userPatchSchema, userSchema } from '../lib/validation.js';
 import { writeAudit } from '../lib/audit.js';
 
 const router = new Router();
@@ -99,7 +99,7 @@ router.patch(
   '/users/:id',
   requirePermission('settings:write'),
   asyncRoute(async (req, res) => {
-    const data = userSchema.parse(req.body);
+    const data = userPatchSchema.parse(req.body);
     const user = req.authUser!;
     const target = await prisma.user.findFirst({
       where: { id: req.params.id, storeId: user.storeId },
@@ -126,8 +126,8 @@ router.patch(
     await prisma.user.update({
       where: { id: target.id },
       data: {
-        name: data.name,
-        email: data.email,
+        name: data.name ?? target.name,
+        email: data.email ?? target.email,
         role: data.role ?? target.role,
         active: data.active ?? target.active,
         ...(data.password ? { passwordHash: await bcrypt.hash(data.password, 12) } : {}),

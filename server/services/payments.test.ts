@@ -2,13 +2,17 @@ import { createHmac } from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  PAYMENTS_UNAVAILABLE_KEY,
   PaymentConfigurationError,
   PaymentVerificationError,
   configuredProvider,
+  configuredProviderName,
   createCheckout,
   demoWebhookSecret,
   isDemoAllowed,
   normalizeWebhook,
+  paymentReadiness,
+  requirePaymentReadiness,
   resolveAppOrigin,
   signPayload,
   verifyDemoTicket,
@@ -16,13 +20,21 @@ import {
   verifyStripeSignature,
 } from './payments';
 
-const secret = 'test-webhook-secret';
+const demoSecret = 'test-webhook-secret';
+const stripeSecret = 'whsec_testwebhooksecret123';
+const stripeKey = 'sk_test_123456789';
+const appUrl = 'https://wishstock.example';
 const nowMs = Date.now();
 
 beforeEach(() => {
-  process.env.JWT_SECRET = 'test-jwt-secret';
-  process.env.PAYMENT_DEMO_WEBHOOK_SECRET = secret;
-  process.env.STRIPE_WEBHOOK_SECRET = secret;
+  vi.stubEnv('NODE_ENV', 'development');
+  vi.stubEnv('APP_URL', appUrl);
+  vi.stubEnv('JWT_SECRET', 'test-jwt-secret');
+  vi.stubEnv('PAYMENT_PROVIDER', 'demo');
+  vi.stubEnv('ALLOW_DEMO_PAYMENTS', 'false');
+  vi.stubEnv('PAYMENT_DEMO_WEBHOOK_SECRET', demoSecret);
+  vi.stubEnv('STRIPE_SECRET_KEY', stripeKey);
+  vi.stubEnv('STRIPE_WEBHOOK_SECRET', stripeSecret);
 });
 
 afterEach(() => {
@@ -32,19 +44,19 @@ afterEach(() => {
 describe('webhook signature verification', () => {
   it('accepts a correctly signed demo payload and rejects tampering', () => {
     const body = JSON.stringify({ id: 'evt_1', type: 'payment.succeeded', transactionId: 'tx_1' });
-    const signature = signPayload(secret, body);
-    expect(verifySignature(secret, body, signature)).toBe(true);
-    expect(verifySignature(secret, `${body} `, signature)).toBe(false);
-    expect(verifySignature(secret, body, undefined)).toBe(false);
+    const signature = signPayload(demoSecret, body);
+    expect(verifySignature(demoSecret, body, signature)).toBe(true);
+    expect(verifySignature(demoSecret, `${body} `, signature)).toBe(false);
+    expect(verifySignature(demoSecret, body, undefined)).toBe(false);
   });
 
   it('accepts a Stripe signature within the replay window', () => {
     const body = '{"id":"evt_2"}';
     const timestamp = String(Math.floor(nowMs / 1000));
-    const signature = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
-    expect(verifyStripeSignature(body, `t=${timestamp},v1=${signature}`, secret, nowMs)).toBe(true);
-    expect(verifyStripeSignature(body, `t=${timestamp},v1=${signature}`, 'other-secret', nowMs)).toBe(false);
-    expect(verifyStripeSignature(body, `t=${Number(timestamp) - 900},v1=${signature}`, secret, nowMs)).toBe(false);
+    const signature = createHmac('sha256', stripeSecret).update(`${timestamp}.${body}`).digest('hex');
+    expect(verifyStripeSignature(body, `t=${timestamp},v1=${signature}`, stripeSecret, nowMs)).toBe(true);
+    expect(verifyStripeSignature(body, `t=${timestamp},v1=${signature}`, 'whsec_other', nowMs)).toBe(false);
+    expect(verifyStripeSignature(body, `t=${Number(timestamp) - 900},v1=${signature}`, stripeSecret, nowMs)).toBe(false);
   });
 });
 
@@ -56,7 +68,7 @@ describe('webhook normalization', () => {
       transactionId: 'tx_1',
       data: { reason: null },
     });
-    const event = normalizeWebhook('demo', body, { 'x-wishstock-signature': signPayload(secret, body) });
+    const event = normalizeWebhook('demo', body, { 'x-wishstock-signature': signPayload(demoSecret, body) });
     expect(event).toMatchObject({
       provider: 'demo',
       eventId: 'demo_evt_1',
@@ -85,7 +97,7 @@ describe('webhook normalization', () => {
       },
     });
     const timestamp = String(Math.floor(nowMs / 1000));
-    const signature = createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+    const signature = createHmac('sha256', stripeSecret).update(`${timestamp}.${body}`).digest('hex');
     const headers = { 'stripe-signature': `t=${timestamp},v1=${signature}` };
     expect(normalizeWebhook('stripe', body, headers)).toMatchObject({
       provider: 'stripe',
@@ -94,7 +106,7 @@ describe('webhook normalization', () => {
     });
 
     const wrongAmount = body.replace('799000', '100');
-    const wrongSignature = createHmac('sha256', secret).update(`${timestamp}.${wrongAmount}`).digest('hex');
+    const wrongSignature = createHmac('sha256', stripeSecret).update(`${timestamp}.${wrongAmount}`).digest('hex');
     expect(() => normalizeWebhook('stripe', wrongAmount, { 'stripe-signature': `t=${timestamp},v1=${wrongSignature}` }))
       .toThrow(PaymentVerificationError);
   });
@@ -106,7 +118,7 @@ describe('webhook normalization', () => {
       data: { object: { id: 'cs_test_2', payment_status: 'unpaid', client_reference_id: 'tx_2', metadata: {} } },
     });
     const timestamp = String(Math.floor(nowMs / 1000));
-    const sign = (body: string) => createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
+    const sign = (body: string) => createHmac('sha256', stripeSecret).update(`${timestamp}.${body}`).digest('hex');
     expect(normalizeWebhook('stripe', pending, { 'stripe-signature': `t=${timestamp},v1=${sign(pending)}` }))
       .toMatchObject({ type: 'payment.pending', transactionId: 'tx_2' });
 
@@ -116,14 +128,16 @@ describe('webhook normalization', () => {
 });
 
 describe('demo availability', () => {
-  it('allows the labelled demo flow in production when PAYMENT_PROVIDER=demo', () => {
+  it('does not allow production demo checkout without an explicit opt-in', () => {
     vi.stubEnv('NODE_ENV', 'production');
-    vi.stubEnv('PAYMENT_PROVIDER', 'demo');
+    expect(isDemoAllowed()).toBe(false);
+    expect(paymentReadiness().missing).toContain('ALLOW_DEMO_PAYMENTS=true');
+
+    vi.stubEnv('ALLOW_DEMO_PAYMENTS', 'true');
     expect(isDemoAllowed()).toBe(true);
   });
 
   it('disables the demo flow when a real provider is configured', () => {
-    vi.stubEnv('NODE_ENV', 'development');
     vi.stubEnv('PAYMENT_PROVIDER', 'stripe');
     expect(isDemoAllowed()).toBe(false);
   });
@@ -131,15 +145,12 @@ describe('demo availability', () => {
 
 describe('checkout origin resolution', () => {
   it('prefers the active loopback request origin over a stale localhost APP_URL', () => {
-    vi.stubEnv('NODE_ENV', 'development');
     vi.stubEnv('APP_URL', 'http://localhost:4999');
     expect(resolveAppOrigin({ url: 'http://localhost:3000/api/billing/checkout' })).toBe('http://localhost:3000');
   });
 
   it('keeps a configured non-local origin', () => {
-    vi.stubEnv('NODE_ENV', 'development');
-    vi.stubEnv('APP_URL', 'https://wishstock.example');
-    expect(resolveAppOrigin({ url: 'http://localhost:3000/api/billing/checkout' })).toBe('https://wishstock.example');
+    expect(resolveAppOrigin({ url: 'http://localhost:3000/api/billing/checkout' })).toBe(appUrl);
   });
 
   it('never trusts request origins or localhost in production', () => {
@@ -147,12 +158,11 @@ describe('checkout origin resolution', () => {
     vi.stubEnv('APP_URL', 'http://localhost:4999');
     expect(resolveAppOrigin({ url: 'http://localhost:3000/api/billing/checkout' })).toBeNull();
 
-    vi.stubEnv('APP_URL', 'https://wishstock.example');
-    expect(resolveAppOrigin({ url: 'https://attacker.example/api/billing/checkout' })).toBe('https://wishstock.example');
+    vi.stubEnv('APP_URL', appUrl);
+    expect(resolveAppOrigin({ url: 'https://attacker.example/api/billing/checkout' })).toBe(appUrl);
   });
 
   it('builds the demo checkout URL on the active origin with a signed ticket', async () => {
-    vi.stubEnv('NODE_ENV', 'development');
     vi.stubEnv('APP_URL', 'http://localhost:4999');
     const result = await createCheckout(
       'demo',
@@ -179,38 +189,121 @@ describe('checkout origin resolution', () => {
 });
 
 describe('production payment configuration', () => {
-  it('normalizes provider names and falls back to demo for unknown values', () => {
+  it('normalizes explicit provider names but never falls back to demo for unknown values', () => {
     vi.stubEnv('PAYMENT_PROVIDER', ' Stripe ');
+    expect(configuredProviderName()).toBe('stripe');
     expect(configuredProvider()).toBe('stripe');
+
     vi.stubEnv('PAYMENT_PROVIDER', 'unknown');
-    expect(configuredProvider()).toBe('demo');
+    expect(configuredProviderName()).toBeNull();
+    expect(() => configuredProvider()).toThrow(PaymentConfigurationError);
+
+    vi.stubEnv('PAYMENT_PROVIDER', undefined);
+    expect(configuredProviderName()).toBeNull();
   });
 
   it('requires a dedicated demo webhook secret in production', () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('PAYMENT_DEMO_WEBHOOK_SECRET', '');
     expect(() => demoWebhookSecret()).toThrow(PaymentConfigurationError);
-    vi.stubEnv('PAYMENT_DEMO_WEBHOOK_SECRET', secret);
-    expect(demoWebhookSecret()).toBe(secret);
+    vi.stubEnv('PAYMENT_DEMO_WEBHOOK_SECRET', demoSecret);
+    expect(demoWebhookSecret()).toBe(demoSecret);
   });
 
   it('rejects a demo webhook when a real provider is configured', () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('PAYMENT_PROVIDER', 'stripe');
     const body = JSON.stringify({ id: 'evt_1', type: 'payment.succeeded', transactionId: 'tx_1' });
-    expect(() => normalizeWebhook('demo', body, { 'x-wishstock-signature': signPayload(secret, body) }))
-      .toThrow(PaymentVerificationError);
+    expect(() => normalizeWebhook('demo', body, { 'x-wishstock-signature': signPayload(demoSecret, body) }))
+      .toThrow(PaymentConfigurationError);
   });
 
   it('does not allow a client to start demo checkout when Stripe is configured', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('PAYMENT_PROVIDER', 'stripe');
-    vi.stubEnv('APP_URL', 'https://wishstock.example');
     await expect(createCheckout(
       'demo',
       { transactionId: 'tx_1', idempotencyKey: 'idem_1', amountKzt: 7_990, storeId: 'store_1', userId: 'user_1' },
-      { url: 'https://wishstock.example/api/billing/checkout' },
+      { url: `${appUrl}/api/billing/checkout` },
     )).rejects.toBeInstanceOf(PaymentConfigurationError);
+  });
+});
+
+describe('payment readiness matrix', () => {
+  it('disables checkout and reports only env variable names when the provider is missing', () => {
+    vi.stubEnv('PAYMENT_PROVIDER', undefined);
+    const readiness = paymentReadiness();
+    expect(readiness).toMatchObject({
+      available: false,
+      provider: 'unknown',
+      demo: false,
+      reasonCode: 'PAYMENT_PROVIDER_MISSING',
+      reasonKey: PAYMENTS_UNAVAILABLE_KEY,
+    });
+    expect(readiness.missing).toContain('PAYMENT_PROVIDER');
+    expect(JSON.stringify(readiness)).not.toContain(stripeKey);
+    expect(JSON.stringify(readiness)).not.toContain(stripeSecret);
+  });
+
+  it('treats an unknown provider as invalid configuration', () => {
+    vi.stubEnv('PAYMENT_PROVIDER', 'paypal');
+    expect(paymentReadiness()).toMatchObject({
+      available: false,
+      provider: 'unknown',
+      reasonCode: 'PAYMENT_PROVIDER_INVALID',
+    });
+  });
+
+  it('allows a fully configured demo provider in development', () => {
+    expect(paymentReadiness()).toMatchObject({
+      available: true,
+      provider: 'demo',
+      demo: true,
+      reasonCode: null,
+      reasonKey: null,
+    });
+  });
+
+  it('requires both production demo opt-in and a dedicated webhook secret', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(paymentReadiness().missing).toContain('ALLOW_DEMO_PAYMENTS=true');
+
+    vi.stubEnv('ALLOW_DEMO_PAYMENTS', 'true');
+    vi.stubEnv('PAYMENT_DEMO_WEBHOOK_SECRET', '');
+    expect(paymentReadiness().missing).toContain('PAYMENT_DEMO_WEBHOOK_SECRET');
+
+    vi.stubEnv('PAYMENT_DEMO_WEBHOOK_SECRET', demoSecret);
+    expect(paymentReadiness()).toMatchObject({ available: true, provider: 'demo', demo: true });
+  });
+
+  it('requires valid-looking Stripe keys and webhook secret', () => {
+    vi.stubEnv('PAYMENT_PROVIDER', 'stripe');
+    vi.stubEnv('STRIPE_SECRET_KEY', 'not-a-stripe-key');
+    vi.stubEnv('STRIPE_WEBHOOK_SECRET', 'short');
+    expect(paymentReadiness().missing).toEqual(['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET']);
+
+    vi.stubEnv('STRIPE_SECRET_KEY', stripeKey);
+    vi.stubEnv('STRIPE_WEBHOOK_SECRET', stripeSecret);
+    expect(paymentReadiness()).toMatchObject({ available: true, provider: 'stripe', demo: false });
+  });
+
+  it('refuses localhost APP_URL in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('PAYMENT_PROVIDER', 'stripe');
+    vi.stubEnv('APP_URL', 'http://localhost:3000');
+    expect(paymentReadiness().missing).toContain('APP_URL');
+  });
+
+  it('throws a safe configuration error from requirePaymentReadiness', () => {
+    vi.stubEnv('PAYMENT_PROVIDER', undefined);
+    try {
+      requirePaymentReadiness();
+      throw new Error('expected PaymentConfigurationError');
+    } catch (error) {
+      expect(error).toBeInstanceOf(PaymentConfigurationError);
+      expect((error as PaymentConfigurationError).reasonKey).toBe(PAYMENTS_UNAVAILABLE_KEY);
+      expect((error as PaymentConfigurationError).reasonCode).toBe('PAYMENT_PROVIDER_MISSING');
+    }
   });
 });
 
@@ -255,7 +348,7 @@ describe('demo webhook normalization', () => {
       transactionId: 'tx_1',
       data: { amountMinor: 799000, currency: 'kzt' },
     });
-    const event = normalizeWebhook('demo', body, { 'x-wishstock-signature': signPayload(secret, body) });
+    const event = normalizeWebhook('demo', body, { 'x-wishstock-signature': signPayload(demoSecret, body) });
     expect(event).toMatchObject({ provider: 'demo', amountMinor: 799000, currency: 'kzt' });
   });
 });

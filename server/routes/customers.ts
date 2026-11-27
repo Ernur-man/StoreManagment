@@ -2,7 +2,7 @@ import { Router } from '../lib/router.js';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth, requirePermission } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
-import { customerSchema } from '../lib/validation.js';
+import { customerPatchSchema, customerSchema } from '../lib/validation.js';
 import { normalizePhone } from '../lib/normalize.js';
 import { writeAudit } from '../lib/audit.js';
 import { requireProAccess } from '../lib/subscription.js';
@@ -86,16 +86,25 @@ router.patch(
   '/:id',
   requirePermission('customers:write'),
   asyncRoute(async (req, res) => {
-    const data = customerSchema.parse(req.body);
+    const data = customerPatchSchema.parse(req.body);
     const user = req.authUser!;
-    const customer = await prisma.customer.updateMany({
+    const existing = await prisma.customer.findFirst({
       where: { id: req.params.id, storeId: user.storeId },
-      data: { ...data, phone: normalizePhone(data.phone), email: data.email || null },
     });
-    if (customer.count === 0) {
+    if (!existing) {
       res.status(404).json({ message: 'errors.notFound' });
       return;
     }
+    const customer = await prisma.customer.updateMany({
+      where: { id: req.params.id, storeId: user.storeId },
+      data: {
+        name: data.name ?? existing.name,
+        phone: data.phone === undefined ? existing.phone : normalizePhone(data.phone),
+        email: data.email === undefined ? existing.email : data.email || null,
+        notes: data.notes === undefined ? existing.notes : data.notes || null,
+        status: data.status ?? existing.status,
+      },
+    });
     await writeAudit(prisma, user, 'CUSTOMER_UPDATED', 'CUSTOMER', req.params.id);
     res.json({ ok: true });
   }),

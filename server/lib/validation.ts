@@ -25,6 +25,17 @@ export const loginSchema = z.object({
   password: z.string().min(8).max(100),
 });
 
+const productVariantSchema = z.object({
+  id: z.string().optional(),
+  sku: text(60),
+  size: text(30),
+  color: text(40),
+  price: z.coerce.number().min(0).max(1_000_000),
+  imageUrl: optionalText(500),
+  lowStockThreshold: z.coerce.number().int().min(0).max(1000).optional().default(3),
+  quantity: z.coerce.number().int().min(0).max(1_000_000).optional().default(0),
+});
+
 export const productSchema = z.object({
   name: text(120),
   sku: text(60),
@@ -33,21 +44,12 @@ export const productSchema = z.object({
   description: optionalText(1000),
   imageUrl: optionalText(500),
   isActive: z.boolean().optional().default(true),
-  variants: z
-    .array(
-      z.object({
-        id: z.string().optional(),
-        sku: text(60),
-        size: text(30),
-        color: text(40),
-        price: z.coerce.number().min(0).max(1_000_000),
-        imageUrl: optionalText(500),
-        lowStockThreshold: z.coerce.number().int().min(0).max(1000).optional().default(3),
-        quantity: z.coerce.number().int().min(0).max(1_000_000).optional().default(0),
-      }),
-    )
-    .min(1)
-    .max(30),
+  variants: z.array(productVariantSchema).min(1).max(30),
+});
+
+/** PATCH schemas deliberately have no defaults: absent fields stay unchanged. */
+export const productPatchSchema = productSchema.partial().extend({
+  variants: z.array(productVariantSchema.partial()).min(1).max(30).optional(),
 });
 
 export const requestSchema = z.object({
@@ -65,6 +67,8 @@ export const requestSchema = z.object({
   requestDate: date.optional(),
   employeeId: z.string().optional().nullable(),
 });
+
+export const requestPatchSchema = requestSchema.partial();
 
 export const requestStatusSchema = z.object({
   status: z.enum(REQUEST_STATUSES),
@@ -91,6 +95,8 @@ export const customerSchema = z.object({
   status: z.enum(['ACTIVE', 'VIP', 'INACTIVE']).optional().default('ACTIVE'),
 });
 
+export const customerPatchSchema = customerSchema.partial();
+
 export const userSchema = z.object({
   name: text(120),
   email: z.string().trim().toLowerCase().email().max(150),
@@ -98,6 +104,8 @@ export const userSchema = z.object({
   role: z.enum(ROLES).optional().default('EMPLOYEE'),
   active: z.boolean().optional().default(true),
 });
+
+export const userPatchSchema = userSchema.partial();
 
 export const settingsSchema = z.object({
   name: text(120),

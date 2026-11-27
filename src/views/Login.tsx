@@ -7,19 +7,23 @@ import { useI18n } from '../i18n';
 import { Button, Field, Input } from '../components/ui';
 import type { AuthUser } from '../lib/types';
 
-const demoAccounts = [
-  { email: 'admin@wishstock.app', labelKey: 'role.ADMIN' as const },
-  { email: 'manager@wishstock.app', labelKey: 'role.MANAGER' as const },
-  { email: 'employee@wishstock.app', labelKey: 'role.EMPLOYEE' as const },
-];
+// Demo credentials must never be advertised in a production build.
+const showDemoAccounts = process.env.NODE_ENV !== 'production';
+const demoAccounts = showDemoAccounts
+  ? [
+      { email: 'admin@wishstock.app', labelKey: 'role.ADMIN' as const },
+      { email: 'manager@wishstock.app', labelKey: 'role.MANAGER' as const },
+      { email: 'employee@wishstock.app', labelKey: 'role.EMPLOYEE' as const },
+    ]
+  : [];
 
 export function Login() {
   const { t, language, setLanguage, error: translateError } = useI18n();
   const user = useAuthStore((state) => state.user);
   const setUser = useAuthStore((state) => state.setUser);
   const navigate = useNavigate();
-  const [email, setEmail] = useState('admin@wishstock.app');
-  const [password, setPassword] = useState('Demo1234!');
+  const [email, setEmail] = useState(showDemoAccounts ? 'admin@wishstock.app' : '');
+  const [password, setPassword] = useState(showDemoAccounts ? 'Demo1234!' : '');
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState('');
@@ -54,7 +58,7 @@ export function Login() {
           </div>
         </div>
         <div className="relative max-w-lg">
-          <p className="mb-4 inline-flex items-center gap-2 rounded-full bg-indigo-500/20 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-indigo-200">{t('common.demo')}</p>
+          {showDemoAccounts && <p className="mb-4 inline-flex items-center gap-2 rounded-full bg-indigo-500/20 px-3 py-1.5 text-[11px] font-bold uppercase tracking-wider text-indigo-200">{t('common.demo')}</p>}
           <h1 className="text-4xl font-extrabold leading-tight tracking-tight xl:text-5xl">{t('login.title')}</h1>
           <p className="mt-5 text-base leading-relaxed text-slate-300">{t('login.subtitle')}</p>
           <div className="mt-10 space-y-4">
@@ -106,25 +110,27 @@ export function Login() {
             </Button>
           </form>
 
-          <div className="mt-10 border-t border-slate-100 pt-6">
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-400">{t('login.demoAccounts')}</p>
-            <div className="mt-3 grid gap-2">
-              {demoAccounts.map((account) => (
-                <button
-                  key={account.email}
-                  type="button"
-                  onClick={() => { setEmail(account.email); setPassword('Demo1234!'); setFormError(''); }}
-                  className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2.5 text-left text-sm hover:border-indigo-300 hover:bg-indigo-50/40"
-                >
-                  <div>
-                    <p className="font-semibold text-slate-700">{account.email}</p>
-                    <p className="text-xs text-slate-400">{t(account.labelKey)} · Demo1234!</p>
-                  </div>
-                  <span className="text-xs font-semibold text-indigo-600">{t('login.useAccount')}</span>
-                </button>
-              ))}
+          {showDemoAccounts && (
+            <div className="mt-10 border-t border-slate-100 pt-6">
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">{t('login.demoAccounts')}</p>
+              <div className="mt-3 grid gap-2">
+                {demoAccounts.map((account) => (
+                  <button
+                    key={account.email}
+                    type="button"
+                    onClick={() => { setEmail(account.email); setPassword('Demo1234!'); setFormError(''); }}
+                    className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2.5 text-left text-sm hover:border-indigo-300 hover:bg-indigo-50/40"
+                  >
+                    <div>
+                      <p className="font-semibold text-slate-700">{account.email}</p>
+                      <p className="text-xs text-slate-400">{t(account.labelKey)} · Demo1234!</p>
+                    </div>
+                    <span className="text-xs font-semibold text-indigo-600">{t('login.useAccount')}</span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </div>
     </div>

@@ -3,7 +3,13 @@ import { Prisma } from '@prisma/client';
 import { PAYMENT_PROVIDERS, type PaymentProviderName } from '../lib/constants.js';
 import { asyncRoute } from '../lib/http.js';
 import { applyPaymentEvent } from '../services/billing.js';
-import { PaymentConfigurationError, PaymentVerificationError, configuredProvider, normalizeWebhook } from '../services/payments.js';
+import {
+  PAYMENTS_UNAVAILABLE_KEY,
+  PaymentConfigurationError,
+  PaymentVerificationError,
+  normalizeWebhook,
+  paymentReadiness,
+} from '../services/payments.js';
 
 /**
  * Provider signatures are computed over the raw request body. The Next.js
@@ -16,8 +22,17 @@ webhookRouter.post(
   '/:provider',
   asyncRoute(async (req, res) => {
     const provider = req.params.provider as PaymentProviderName;
-    if (!PAYMENT_PROVIDERS.includes(provider) || provider !== configuredProvider()) {
+    const readiness = paymentReadiness(req);
+    if (!PAYMENT_PROVIDERS.includes(provider) || readiness.provider !== provider) {
       res.status(404).json({ error: 'NOT_FOUND', message: 'errors.notFound' });
+      return;
+    }
+    if (!readiness.available) {
+      res.status(503).json({
+        error: 'PAYMENTS_UNAVAILABLE',
+        message: readiness.reasonKey ?? PAYMENTS_UNAVAILABLE_KEY,
+        reason: readiness.reasonCode,
+      });
       return;
     }
 
@@ -31,7 +46,11 @@ webhookRouter.post(
         return;
       }
       if (error instanceof PaymentConfigurationError) {
-        res.status(503).json({ error: 'PAYMENT_NOT_CONFIGURED', message: 'billing.errors.notConfigured' });
+        res.status(503).json({
+          error: 'PAYMENTS_UNAVAILABLE',
+          message: error.reasonKey ?? PAYMENTS_UNAVAILABLE_KEY,
+          reason: error.reasonCode,
+        });
         return;
       }
       throw error;

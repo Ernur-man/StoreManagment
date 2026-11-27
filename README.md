@@ -39,7 +39,7 @@ There is no separate API port and no Vite proxy: the browser calls same-origin `
 
 ### Demo accounts
 
-All demo data is clearly fictional. No real customer details are included.
+All demo data is clearly fictional. No real customer details are included. These credentials are hidden from the login screen in production builds; the list below applies only to local/throwaway demo databases. Do not seed these accounts into production.
 
 | Role | Email | Password |
 |---|---|---|
@@ -71,11 +71,11 @@ The script reads every table with Node's built-in `node:sqlite` and writes throu
 
 There is exactly one plan: **WishStock Pro — 7,990 ₸ / month**, with **30 days of access** per payment. There are no other tiers, no free trial and no automatic renewal; subscribers renew manually from the billing page.
 
-- **Subscription page (`/billing`)** — plan name, `7,990 ₸ / month`, included features, current status, start date, next conditional renewal date (DEMO) and expiration date, **Subscribe Now**, **Payment Methods**, DEMO renewal simulation and **Manage Subscription** with cancellation. Login, account settings and billing are never Pro-gated.
+- **Subscription page (`/billing`)** — plan name, `7,990 ₸ / month`, included features, current status, start date, next conditional renewal date (DEMO) and expiration date, **Subscribe Now**, **Payment Methods**, DEMO renewal simulation and **Manage Subscription** with cancellation. Checkout is disabled and an availability notice is shown when server configuration is incomplete; no success banner is derived from URL query parameters. Login, account settings and billing are never Pro-gated.
 - **Statuses** — `inactive`, `pending`, `active`, `past_due`, `cancelled`, `expired`. Access is granted only while a paid period is running (`active`) or after cancellation until the stored expiration date. Expiry is derived from timestamps on every request, so no scheduler is needed.
 - **Backend enforcement** — `requireProAccess` protects products, requests, arrivals, customers, dashboard and notifications APIs. The frontend `RequirePro` layout mirrors this only for navigation; it is never the security boundary.
-- **Payments** — checkout is created on the server. The client never sends a status, amount or payment result, and cannot choose a provider other than the server-configured one. Card data is handled only in the DEMO vault: only published test PANs are accepted; PAN/CVV are validated in memory and discarded, while the database stores only brand, last4, holder name and expiry. Activation happens only after a **signed webhook** (Stripe) or a **signed demo confirmation** when `PAYMENT_PROVIDER=demo`.
-- **Demo mode** — available whenever `PAYMENT_PROVIDER=demo`, including production, and always labelled as a test. Demo checkout can simulate success, failure and cancellation for acceptance testing; no bank is contacted and no money is charged. With `PAYMENT_PROVIDER=stripe` the demo flow is disabled.
+- **Payments** — checkout is created on the server. The client never sends a status, amount or payment result, and cannot choose a provider other than the server-configured one. `PAYMENT_PROVIDER` is explicit: a missing or unknown value disables checkout and returns HTTP 503 (`PAYMENTS_UNAVAILABLE`) instead of silently falling back to demo. Stripe requires a valid-looking `STRIPE_SECRET_KEY` (`sk_test_`/`sk_live_`), `STRIPE_WEBHOOK_SECRET` (`whsec_`) and a non-local HTTPS `APP_URL`. Card data is handled only in the DEMO vault: only published test PANs are accepted; PAN/CVV are validated in memory and discarded, while the database stores only brand, last4, holder name and expiry. Activation happens only after a **signed webhook** (Stripe) or a **signed demo confirmation** when demo is fully configured.
+- **Demo mode** — `PAYMENT_PROVIDER=demo` is a labelled simulation that never contacts a bank or charges money. In production it also requires the explicit opt-in `ALLOW_DEMO_PAYMENTS=true` and a dedicated `PAYMENT_DEMO_WEBHOOK_SECRET`; without both, demo checkout, demo cards and demo confirmation are disabled. A real `PAYMENT_PROVIDER=stripe` configuration always disables demo controls, even if a stale demo secret exists. Demo checkout can simulate success, failure and cancellation only for acceptance testing.
 - **Payment Methods (`/billing/payment-methods`)** — attach, replace or remove a published test Visa/Mastercard number (for example `4242 4242 4242 4242`). Real card numbers are rejected. Only a masked `DEMO CARD` (for example `Visa •••• 4242`) is ever shown or stored.
 - **Admin management** — visible only to `billing:admin` (the `ADMIN` role). Shows subscriber counts, monthly revenue, subscription history and per-record payment history. Admins can repair a status or grant 30 days manually; every change is written to the audit log.
 
@@ -86,7 +86,7 @@ There is exactly one plan: **WishStock Pro — 7,990 ₸ / month**, with **30 da
 
 The raw body is passed to signature verification before JSON parsing. Invalid, replayed and mismatched-amount events are rejected. Provider events are applied once via unique `(provider, eventId)`, so duplicate deliveries cannot extend a subscription twice. KZT minor units are `7,990 KZT = 799000`.
 
-> Kazakhstan is not currently a supported Stripe **business country**, so a real Stripe account may not be available there even though KZT presentment works. No Kaspi or other local-provider credentials were provided, so only the demo and Stripe adapters are implemented. Do not switch to production without a verified merchant account and its real webhook secret.
+> Kazakhstan is not currently a supported Stripe **business country**, so a real Stripe account may not be available there even though KZT presentment works. No Kaspi or other local-provider credentials were provided, so only the demo and Stripe adapters are implemented. Do not switch to production without a verified merchant account and its real webhook secret. A configured-but-incomplete provider (including missing `APP_URL`, Stripe keys or demo opt-in) is treated as unavailable; no fake success is ever shown to a customer.
 
 ## What you can do
 
@@ -109,7 +109,8 @@ The raw body is passed to signature verification before JSON parsing. Invalid, r
 | `npm run build` | Generate Prisma Client and build the production Next.js app |
 | `npm start` | Serve the built Next.js app (used by Vercel) |
 | `npm run typecheck` | Run TypeScript checks |
-| `npm test` | Run Vitest unit tests (normalization, i18n parity, subscription lifecycle, webhook signatures) |
+| `npm test` | Run Vitest unit tests (normalization, i18n parity, subscription lifecycle, payment readiness/gating, webhook signatures, Resend outbox, PATCH schemas) |
+| `npx prisma validate` | Validate `prisma/schema.prisma` without touching the database |
 | `npm run db:migrate` | Apply PostgreSQL migrations with `DIRECT_URL` (`prisma migrate deploy`) |
 | `npm run db:migrate:dev` | Create a development migration interactively |
 | `npm run db:seed` | Load fictional demo data into a **fresh throwaway** database |
@@ -130,9 +131,10 @@ Set these in Vercel Project Settings → Environment Variables (or in a local `.
 | `DIRECT_URL` | Direct (non-pooler) PostgreSQL URL used by Prisma migrations |
 | `JWT_SECRET` | Required in production; long random value that signs session JWTs and demo checkout tickets |
 | `APP_URL` | Public HTTPS origin, used for provider redirect URLs (not localhost in production) |
-| `PAYMENT_PROVIDER` | `demo` for the labelled test mode (also in production); `stripe` only with a real merchant account |
+| `PAYMENT_PROVIDER` | Required. `demo` for the labelled test mode; `stripe` only with a real merchant account. Missing/unknown disables checkout |
+| `ALLOW_DEMO_PAYMENTS` | Required as `true` only for production demo payments. Leave unset/false for customer-facing deployments |
 | `PAYMENT_DEMO_WEBHOOK_SECRET` | Required for signed demo webhooks in production; use a dedicated secret, not `JWT_SECRET` |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Required when `PAYMENT_PROVIDER=stripe` |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` | Both required when `PAYMENT_PROVIDER=stripe`; must be real provider-format values |
 | `RESEND_API_KEY` | Server-only sending key for arrival notifications; omit to disable email without affecting arrivals |
 | `RESEND_FROM_EMAIL` | Verified sender address, e.g. `WishStock <notifications@yourdomain.com>`; omit to disable email |
 | `CLIENT_ORIGIN` | Optional comma-separated CORS allowlist for credentialed external API clients |
@@ -149,21 +151,23 @@ WishStock uses the official `resend` Node.js SDK **only in Next.js backend code*
 2. Verify a sending domain at [resend.com/domains](https://resend.com/domains). Resend issues DNS records (typically SPF and DKIM, and sometimes a DMARC/return-path record — use the exact records shown in your Resend dashboard). Add those records at your DNS provider and wait for Resend to show the domain as verified.
 3. Set `RESEND_FROM_EMAIL` to an address on that verified domain, for example `WishStock <notifications@yourdomain.com>`. For initial testing, `onboarding@resend.dev` is allowed by Resend only when sending to the account owner's verified email; switch to your own verified domain before notifying customers.
 4. In Vercel, add **both** variables to Project Settings → Environment Variables for **Development, Preview and Production** (all environments where matching arrivals should send email). This repository does not modify production environment variables automatically.
-5. If either variable is missing or invalid, email sending is skipped and notification rows stay `PENDING`; stock arrivals, matching and inventory remain unchanged. Failed deliveries are stored as `FAILED` on the outbox row and can be retried from Stock Arrivals → Customer email history by an authorized user.
+5. If either variable is missing or invalid, sending is skipped: the row stays `PENDING`, the attempt counter is not incremented, and a `RESEND_NOT_CONFIGURED` diagnostic is stored and shown in Stock Arrivals → Customer email history. A manual retry in that state returns HTTP 503 (`EMAIL_NOT_CONFIGURED`) instead of falsely reporting success. Stock arrivals, matching and inventory remain unchanged. Provider rejections are stored as `FAILED` with sanitized error text and can be retried by an authorized user. A row becomes `SENT` only when Resend returns a provider message ID; a 2xx response without an ID is recorded as `FAILED`.
 
-Email is queued only for a customer request that has its own valid email address, and only after a `WAITING` request is successfully matched to a new arrival. Delivery is idempotent per `(arrival, request)` via a database unique index and a stable Resend idempotency key, so refreshes and duplicate events never resend a delivered notification.
+Email is queued only for a customer request that has its own valid email address, and only after a `WAITING` request is successfully matched to a new arrival. Delivery is idempotent per `(arrival, request)` via a database unique index and a stable Resend idempotency key, so refreshes and duplicate events never resend a delivered notification. There is no background scheduler: if a process dies after the outbox row is committed, an authorized user must retry from Customer email history. Existing legacy requests created before the email migration may have no request email and therefore cannot be backfilled automatically.
 
 ## Deploy to Vercel
 
 1. Import the project into Vercel. Next.js is detected automatically; no `vercel.json` or separate backend is required.
 2. In the Vercel dashboard, add the **Neon (PostgreSQL)** Marketplace integration and connect it to the project. Vercel injects database variables; map the pooled value to `DATABASE_URL` (add `?pgbouncer=true` if needed) and the unpooled value to `DIRECT_URL`.
-3. Add the application variables from the table above. Use the final Vercel HTTPS domain for `APP_URL`.
-4. From a local/CI machine with the database credentials, run `npm run db:migrate` and `npm run db:transfer` before sending traffic. Do not run `db:seed` against the production database.
-5. Deploy. Vercel runs `npm install` (the `postinstall` script runs `prisma generate`) and `npm run build`. APIs are available at `https://<domain>/api/*`.
-6. Only if `PAYMENT_PROVIDER=stripe`, register the Stripe webhook at `https://<domain>/api/billing/webhook/stripe` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` and `checkout.session.expired`. Demo mode needs no external provider or webhook registration.
-7. Verify `/api/health`, login, Pro gating and the selected payment flow on a preview deployment. Do not run the mutating smoke scripts against production.
+3. Add the application variables from the table above. Use the final Vercel HTTPS domain for `APP_URL`. Set `PAYMENT_PROVIDER` explicitly; in production use either a fully configured Stripe account or `PAYMENT_PROVIDER=demo` **plus** `ALLOW_DEMO_PAYMENTS=true` for a labelled test deployment.
+4. From a local/CI machine with the database credentials, run `npm run db:migrate` (`prisma migrate deploy`) before sending traffic. This applies the Resend outbox migration and the idempotent `20261127120000_seed_default_subscription_plan` migration, which creates the single Pro plan without overwriting an existing row. Do not run `db:seed` against the production database: it refuses to run when `NODE_ENV=production` and contains demo users/data.
+5. If migrating an existing installation, run `npm run db:transfer` after migrations and verify row counts. On a fresh database there are no users: create the first store/admin through a secure manual bootstrap before routing customers. The plan migration does not create users.
+6. Deploy. Vercel runs `npm install` (the `postinstall` script runs `prisma generate`) and `npm run build`. APIs are available at `https://<domain>/api/*`.
+7. Only if `PAYMENT_PROVIDER=stripe`, register the Stripe webhook at `https://<domain>/api/billing/webhook/stripe` for `checkout.session.completed`, `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed` and `checkout.session.expired`. Demo mode needs no external provider or webhook registration.
+8. For Resend email, add both `RESEND_API_KEY` and `RESEND_FROM_EMAIL` to the relevant Vercel environments, verify the sender domain in Resend, and confirm the migration is applied. Without them, arrivals still work but emails remain queued with `RESEND_NOT_CONFIGURED`.
+9. Verify `/api/health`, login, Pro gating, the selected payment flow and one arrival email on a preview deployment. Do not run the mutating smoke scripts against production.
 
-No deployment or Git push is performed as part of the repository changes.
+No deployment, Git push, production migration, or production environment change is performed as part of the repository changes.
 
 ## Architecture notes
 
@@ -177,23 +181,24 @@ No deployment or Git push is performed as part of the repository changes.
 ## Testing
 
 - `npm run typecheck` — TypeScript.
-- `npm test` — unit tests: normalization, EN/RU i18n key parity, subscription status/access rules, demo HMAC and Stripe webhook verification (including replay and amount checks).
+- `npm test` — unit tests: normalization, EN/RU i18n key parity, subscription status/access rules, payment readiness/error mapping, webhook signature/replay/amount checks, mocked Resend outbox behavior and PATCH schema defaults.
+- `npx prisma validate` — schema validation only; no database connection or data change.
 - `npm run build` — production Next.js build and type validation.
 - `npm run smoke` / `npm run smoke:billing` — end-to-end API flows against a running app with demo payments available. Start the app first (`npm run dev` or `npm start`) and use a throwaway database.
 
-Unit tests, type checks and the production build pass locally. Database-backed acceptance checks require PostgreSQL credentials, which are not included in the repository.
+Unit tests, type checks, schema validation and the production build can be run locally. Database-backed acceptance checks require PostgreSQL credentials, which are not included in the repository. Automated tests mock payment and email providers; they do not prove a real Stripe charge or a real Resend delivery.
 
 ## Limitations
 
 - SMS and WhatsApp are **not** sent automatically; the app provides `tel:` and `wa.me` links for staff to contact customers.
 - The demo is seeded for one store. The schema is multi-store ready, but there is no store-switcher UI yet.
-- Email notifications are out of scope.
+- Email notifications are implemented through Resend, but there is no cron/worker sweeper: stuck `PENDING` rows require an authorized manual retry. Delivery, bounces and spam placement depend on the external provider and cannot be guaranteed by this repository.
 - Data export is provided for requests (CSV/Excel); there is no scheduled backup job.
 - The login rate limiter is in-memory and therefore per Vercel function instance. It preserves the 12-attempt/15-minute contract per instance but is not globally distributed.
 - Vercel functions run in UTC. Date-bucket logic was left unchanged rather than silently shifted.
 - Payments: no Kaspi or other Kazakhstan local-provider integration; Stripe business-country restrictions apply.
 - No verified auto-renew. Renewal is a manual 30-day purchase; failed/abandoned payments never grant access and never revoke an already-paid period.
-- Demo activation/renewals are server-verified test operations, explicitly marked as DEMO in the UI and history; they never represent bank transactions. Real activation requires a provider-signed webhook with the correct amount and currency.
+- Demo activation/renewals are server-verified test operations, explicitly marked as DEMO in the UI and history; they never represent bank transactions. In production they require `ALLOW_DEMO_PAYMENTS=true` and are not intended for real customers. Real activation requires a provider-signed webhook with the correct amount and currency.
 - Expiry is evaluated from timestamps on each request; no background worker or renewal reminder emails are included.
 - All names, phones, emails and addresses in seed data are fictional.
 

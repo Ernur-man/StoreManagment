@@ -54,18 +54,42 @@ export interface DemoTicket {
 }
 
 export class PaymentError extends Error {}
-export class PaymentConfigurationError extends PaymentError {}
+export class PaymentConfigurationError extends PaymentError {
+  constructor(
+    message: string,
+    /** Safe, translated message key for API responses. Never an internal error. */
+    public readonly reasonKey?: string,
+    /** Stable diagnostic code for operators. Never an env value. */
+    public readonly reasonCode?: string,
+  ) {
+    super(message);
+    this.name = 'PaymentConfigurationError';
+  }
+}
 export class PaymentProviderError extends PaymentError {}
 export class PaymentVerificationError extends PaymentError {}
 
 const DEV_JWT_SECRET = 'wishstock-insecure-development-secret';
 const STRIPE_API = 'https://api.stripe.com/v1';
+export const PAYMENTS_UNAVAILABLE_KEY = 'billing.errors.paymentsUnavailable';
+
+export type PaymentProviderStatus = PaymentProviderName | 'unknown';
+
+export interface PaymentReadiness {
+  available: boolean;
+  provider: PaymentProviderStatus;
+  demo: boolean;
+  reasonCode: string | null;
+  reasonKey: string | null;
+  /** Env variable NAMES only; never values. */
+  missing: string[];
+}
 
 function jwtSecret(): string {
   const configured = process.env.JWT_SECRET;
   if (configured?.trim()) return configured;
   if (process.env.NODE_ENV === 'production') {
-    throw new PaymentConfigurationError('JWT_SECRET is required in production');
+    throw new PaymentConfigurationError('JWT_SECRET is required in production', PAYMENTS_UNAVAILABLE_KEY, 'JWT_SECRET_MISSING');
   }
   return DEV_JWT_SECRET;
 }
@@ -123,26 +147,128 @@ export function resolveAppOrigin(request?: AppOriginRequest): string | null {
   return configured.origin;
 }
 
+/** Returns the explicitly configured provider, or null when missing/invalid. */
+export function configuredProviderName(): PaymentProviderName | null {
+  const value = process.env.PAYMENT_PROVIDER?.trim().toLowerCase();
+  if (!value || !PAYMENT_PROVIDERS.includes(value as PaymentProviderName)) return null;
+  return value as PaymentProviderName;
+}
+
+/** For operations only. Callers that must not throw use configuredProviderName(). */
 export function configuredProvider(): PaymentProviderName {
-  const value = (process.env.PAYMENT_PROVIDER ?? 'demo').trim().toLowerCase();
-  return PAYMENT_PROVIDERS.includes(value as PaymentProviderName) ? (value as PaymentProviderName) : 'demo';
+  const provider = configuredProviderName();
+  if (!provider) {
+    throw new PaymentConfigurationError(
+      'PAYMENT_PROVIDER is missing or invalid',
+      PAYMENTS_UNAVAILABLE_KEY,
+      'PAYMENT_PROVIDER_INVALID',
+    );
+  }
+  return provider;
+}
+
+function isTrueFlag(value: string | undefined): boolean {
+  return value?.trim().toLowerCase() === 'true';
+}
+
+function isStripeSecretKey(value: string | undefined): boolean {
+  return /^sk_(test|live)_[A-Za-z0-9]+$/.test(value?.trim() ?? '');
+}
+
+function isStripeWebhookSecret(value: string | undefined): boolean {
+  return /^whsec_[A-Za-z0-9]+$/.test(value?.trim() ?? '');
+}
+
+function unavailable(
+  provider: PaymentProviderStatus,
+  reasonCode: string,
+  missing: string[] = [],
+): PaymentReadiness {
+  return {
+    available: false,
+    provider,
+    demo: false,
+    reasonCode,
+    reasonKey: PAYMENTS_UNAVAILABLE_KEY,
+    missing,
+  };
 }
 
 /**
- * The demo flow is enabled when the configured provider is the built-in demo
- * adapter, including in production. It is always presented as a test with no
- * real charge. When a real provider is configured the demo flow is switched off
- * so a simulation can never be mistaken for a live transaction.
+ * Single source of truth for whether checkout/simulation may be offered.
+ * In production, demo requires an explicit ALLOW_DEMO_PAYMENTS=true opt-in so
+ * a missing or mistyped provider can never silently enable fake payments.
+ */
+export function paymentReadiness(request?: AppOriginRequest): PaymentReadiness {
+  const configured = configuredProviderName();
+  if (!configured) {
+    const missing = process.env.PAYMENT_PROVIDER?.trim()
+      ? []
+      : ['PAYMENT_PROVIDER'];
+    return unavailable(
+      'unknown',
+      missing.length > 0 ? 'PAYMENT_PROVIDER_MISSING' : 'PAYMENT_PROVIDER_INVALID',
+      missing,
+    );
+  }
+
+  const isProduction = process.env.NODE_ENV === 'production';
+  const missing: string[] = [];
+  if (!resolveAppOrigin(request)) missing.push('APP_URL');
+  if (isProduction && !process.env.JWT_SECRET?.trim()) missing.push('JWT_SECRET');
+
+  if (configured === 'demo') {
+    if (isProduction && !isTrueFlag(process.env.ALLOW_DEMO_PAYMENTS)) {
+      missing.push('ALLOW_DEMO_PAYMENTS=true');
+    }
+    if (isProduction && !process.env.PAYMENT_DEMO_WEBHOOK_SECRET?.trim()) {
+      missing.push('PAYMENT_DEMO_WEBHOOK_SECRET');
+    }
+  } else {
+    if (!isStripeSecretKey(process.env.STRIPE_SECRET_KEY)) missing.push('STRIPE_SECRET_KEY');
+    if (!isStripeWebhookSecret(process.env.STRIPE_WEBHOOK_SECRET)) missing.push('STRIPE_WEBHOOK_SECRET');
+  }
+
+  if (missing.length > 0) return unavailable(configured, 'PAYMENT_CONFIG_INCOMPLETE', missing);
+  return {
+    available: true,
+    provider: configured,
+    demo: configured === 'demo',
+    reasonCode: null,
+    reasonKey: null,
+    missing: [],
+  };
+}
+
+export function requirePaymentReadiness(request?: AppOriginRequest): PaymentReadiness {
+  const readiness = paymentReadiness(request);
+  if (!readiness.available) {
+    throw new PaymentConfigurationError(
+      'Payment provider is not fully configured',
+      readiness.reasonKey ?? PAYMENTS_UNAVAILABLE_KEY,
+      readiness.reasonCode ?? 'PAYMENT_UNAVAILABLE',
+    );
+  }
+  return readiness;
+}
+
+/**
+ * True only when a fully configured demo adapter may be used. A real provider
+ * never enables demo simulation, even if a stale demo secret still exists.
  */
 export function isDemoAllowed(): boolean {
-  return configuredProvider() === 'demo';
+  return paymentReadiness().demo;
 }
 
 export function demoWebhookSecret(): string {
   const configured = process.env.PAYMENT_DEMO_WEBHOOK_SECRET;
   if (configured?.trim()) return configured;
   if (process.env.NODE_ENV === 'production') {
-    throw new PaymentConfigurationError('PAYMENT_DEMO_WEBHOOK_SECRET is required in production');
+    throw new PaymentConfigurationError(
+      'PAYMENT_DEMO_WEBHOOK_SECRET is required in production',
+      PAYMENTS_UNAVAILABLE_KEY,
+      'DEMO_WEBHOOK_SECRET_MISSING',
+    );
   }
   return jwtSecret();
 }
@@ -208,19 +334,21 @@ export async function createCheckout(
   input: CheckoutInput,
   request?: AppOriginRequest,
 ): Promise<CheckoutResult> {
-  // Only the server-configured provider may ever be used. A client must not be
-  // able to switch a demo deployment to a real checkout integration.
-  if (provider !== configuredProvider()) {
-    throw new PaymentConfigurationError('The requested payment provider is not enabled for this deployment');
+  // Only a fully configured, server-selected provider may ever be used. A
+  // client must not be able to switch a demo deployment to a real integration.
+  const readiness = requirePaymentReadiness(request);
+  if (readiness.provider !== provider) {
+    throw new PaymentConfigurationError(
+      'The requested payment provider is not enabled for this deployment',
+      'billing.errors.providerMismatch',
+      'PROVIDER_MISMATCH',
+    );
   }
   if (provider === 'demo') return createDemoCheckout(input, request);
   return createStripeCheckout(input, request);
 }
 
 function createDemoCheckout(input: CheckoutInput, request?: AppOriginRequest): CheckoutResult {
-  if (!isDemoAllowed()) {
-    throw new PaymentConfigurationError('Demo checkout is not enabled for the configured provider');
-  }
   const base = resolveAppOrigin(request);
   if (!base) throw new PaymentConfigurationError('APP_URL is not configured');
   const providerPaymentId = `demo_${randomUUID()}`;
@@ -314,7 +442,13 @@ export function normalizeWebhook(
   };
 
   if (provider === 'demo') {
-    if (!isDemoAllowed()) throw new PaymentVerificationError('Demo webhooks are not enabled for the configured provider');
+    if (!isDemoAllowed()) {
+      throw new PaymentConfigurationError(
+        'Demo webhooks are not enabled for the configured provider',
+        PAYMENTS_UNAVAILABLE_KEY,
+        'DEMO_NOT_ENABLED',
+      );
+    }
     if (!verifySignature(demoWebhookSecret(), rawBody, header('x-wishstock-signature'))) {
       throw new PaymentVerificationError('Invalid demo webhook signature');
     }
@@ -338,7 +472,14 @@ export function normalizeWebhook(
     };
   }
 
-  const secret = process.env.STRIPE_WEBHOOK_SECRET;
+  const secret = process.env.STRIPE_WEBHOOK_SECRET?.trim();
+  if (!isStripeWebhookSecret(secret)) {
+    throw new PaymentConfigurationError(
+      'STRIPE_WEBHOOK_SECRET is not configured',
+      PAYMENTS_UNAVAILABLE_KEY,
+      'STRIPE_WEBHOOK_SECRET_MISSING',
+    );
+  }
   if (!verifyStripeSignature(rawBody, header('stripe-signature'), secret)) {
     throw new PaymentVerificationError('Invalid Stripe webhook signature');
   }

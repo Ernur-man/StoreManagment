@@ -6,7 +6,7 @@ import { asyncRoute } from '../lib/http.js';
 import { prisma } from '../lib/prisma.js';
 import { addDays, subscriptionView } from '../lib/subscription.js';
 import { adminGrantSchema, adminSubscriptionStatusSchema } from '../lib/validation.js';
-import { configuredProvider } from '../services/payments.js';
+import { paymentReadiness } from '../services/payments.js';
 
 /** All admin billing endpoints are behind `billing:admin` (ADMIN has `*`). */
 export const adminBillingRouter = new Router();
@@ -62,7 +62,7 @@ adminBillingRouter.get(
       _count: true,
     });
     res.json({
-      demo: configuredProvider() === 'demo',
+      demo: paymentReadiness(req).demo,
       stats: {
         totalSubscribers: views.length,
         active: count('active'),

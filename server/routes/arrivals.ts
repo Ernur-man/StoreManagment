@@ -76,12 +76,8 @@ router.post(
     }
     const result = await registerArrival({ ...input, employeeId }, user);
     // Email is post-commit only. The dispatcher persists failures and never
-    // throws into the arrival response.
-    try {
-      await dispatchArrivalEmails(result.emailNotificationIds ?? []);
-    } catch (error) {
-      console.error('[WishStock] arrival email dispatch error', error);
-    }
+    // throws into the arrival response; stock arrivals are never rolled back.
+    await dispatchArrivalEmails(result.emailNotificationIds ?? []);
     res.status(201).json(result);
   }),
 );

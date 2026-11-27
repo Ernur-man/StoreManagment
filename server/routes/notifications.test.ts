@@ -84,6 +84,17 @@ describe('arrival email notification API security', () => {
     expect(JSON.stringify(state.retry.mock.calls)).not.toContain('attacker@example.com');
   });
 
+  it('returns 503 when email delivery is not configured', async () => {
+    state.retry.mockResolvedValueOnce({ status: 'UNAVAILABLE', notification: null });
+    const response = await call('POST', '/emails/notif_1/retry', undefined, 'email-unavailable-test');
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({
+      error: 'EMAIL_NOT_CONFIGURED',
+      message: 'notifications.errors.emailUnavailable',
+    });
+    expect(state.retry).toHaveBeenCalledWith('notif_1', 'store_1');
+  });
+
   it('rate limits repeated retries', async () => {
     let lastStatus = 0;
     for (let index = 0; index < 11; index += 1) {

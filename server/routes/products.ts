@@ -2,7 +2,7 @@ import { Router } from '../lib/router.js';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth, requirePermission } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
-import { adjustInventorySchema, productSchema } from '../lib/validation.js';
+import { adjustInventorySchema, productPatchSchema, productSchema } from '../lib/validation.js';
 import { availabilityFor } from '../lib/constants.js';
 import { writeAudit } from '../lib/audit.js';
 import { requireProAccess } from '../lib/subscription.js';
@@ -136,7 +136,7 @@ router.patch(
   '/:id',
   requirePermission('products:write'),
   asyncRoute(async (req, res) => {
-    const data = productSchema.parse(req.body);
+    const data = productPatchSchema.parse(req.body);
     const id = req.params.id;
     const user = req.authUser!;
     const existing = await prisma.product.findFirst({
@@ -151,27 +151,27 @@ router.patch(
       await tx.product.update({
         where: { id },
         data: {
-          name: data.name,
-          sku: data.sku,
-          category: data.category,
-          brand: data.brand || null,
-          description: data.description || null,
-          imageUrl: data.imageUrl || null,
-          isActive: data.isActive,
+          name: data.name ?? existing.name,
+          sku: data.sku ?? existing.sku,
+          category: data.category ?? existing.category,
+          brand: data.brand === undefined ? existing.brand : data.brand || null,
+          description: data.description === undefined ? existing.description : data.description || null,
+          imageUrl: data.imageUrl === undefined ? existing.imageUrl : data.imageUrl || null,
+          isActive: data.isActive ?? existing.isActive,
         },
       });
-      for (const variant of data.variants) {
+      for (const variant of data.variants ?? []) {
         const belongs = existing.variants.find((v) => v.id === variant.id);
         if (belongs) {
           await tx.productVariant.update({
             where: { id: belongs.id },
             data: {
-              sku: variant.sku,
-              size: variant.size,
-              color: variant.color,
-              price: variant.price,
-              imageUrl: variant.imageUrl || null,
-              lowStockThreshold: variant.lowStockThreshold ?? 3,
+              sku: variant.sku ?? belongs.sku,
+              size: variant.size ?? belongs.size,
+              color: variant.color ?? belongs.color,
+              price: variant.price ?? belongs.price,
+              imageUrl: variant.imageUrl === undefined ? belongs.imageUrl : variant.imageUrl || null,
+              lowStockThreshold: variant.lowStockThreshold ?? belongs.lowStockThreshold,
             },
           });
           if (variant.quantity !== undefined) {
@@ -186,10 +186,10 @@ router.patch(
             data: {
               storeId: user.storeId,
               productId: id,
-              sku: variant.sku,
-              size: variant.size,
-              color: variant.color,
-              price: variant.price,
+              sku: variant.sku ?? '',
+              size: variant.size ?? '',
+              color: variant.color ?? '',
+              price: variant.price ?? 0,
               imageUrl: variant.imageUrl || null,
               lowStockThreshold: variant.lowStockThreshold ?? 3,
             },

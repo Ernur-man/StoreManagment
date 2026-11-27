@@ -301,8 +301,29 @@ export interface Subscription {
   provider: string | null;
 }
 
+export interface PaymentAvailability {
+  available: boolean;
+  provider: 'demo' | 'stripe' | 'unknown';
+  demo: boolean;
+  reasonCode: string | null;
+  reasonKey: string | null;
+}
+
+export interface BillingPlanResponse {
+  plan: SubscriptionPlan;
+  paymentProvider: PaymentAvailability['provider'];
+  demoMode: boolean;
+  paymentsAvailable: boolean;
+  paymentUnavailableReason: string | null;
+  paymentUnavailableKey: string | null;
+}
+
 export interface BillingResponse {
   demo: boolean;
+  paymentsAvailable: boolean;
+  paymentProvider: PaymentAvailability['provider'];
+  paymentUnavailableReason: string | null;
+  paymentUnavailableKey: string | null;
   plan: SubscriptionPlan;
   subscription: Subscription | null;
   view: {

@@ -94,6 +94,10 @@ router.post(
       res.status(409).json({ message: 'notifications.errors.notRetryable' });
       return;
     }
+    if (result.status === 'UNAVAILABLE') {
+      res.status(503).json({ error: 'EMAIL_NOT_CONFIGURED', message: 'notifications.errors.emailUnavailable' });
+      return;
+    }
     res.json({ ok: true, notification: result.notification });
   }),
 );

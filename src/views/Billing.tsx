@@ -51,7 +51,7 @@ export function Billing() {
 
   useEffect(() => {
     void refresh();
-  }, [refresh, paymentResult, demoResult]);
+  }, [refresh]);
 
   async function subscribe() {
     setBusy(true);
@@ -108,6 +108,8 @@ export function Billing() {
   const { plan, view, payments } = data;
   const status = view.status;
   const isAdmin = user?.role === 'ADMIN';
+  const paymentsAvailable = data.paymentsAvailable;
+  const demoReady = paymentsAvailable && data.demo;
 
   return (
     <>
@@ -117,19 +119,20 @@ export function Billing() {
         subtitle={t('billing.subtitle')}
       />
 
-      {data.demo && (
+      {!paymentsAvailable && (
+        <div className="mb-5 flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{translateError(data.paymentUnavailableKey ?? 'billing.errors.paymentsUnavailable')}</span>
+        </div>
+      )}
+
+      {demoReady && (
         <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
           <span>{t('billing.demoBanner')}</span>
         </div>
       )}
 
-      {(paymentResult === 'success' || demoResult === 'success') && (
-        <div className="mb-5 flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
-          <Info className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{data.demo ? t('billing.paymentSuccess') : t('billing.paymentSuccessReal')}</span>
-        </div>
-      )}
       {(paymentResult === 'cancelled' || demoResult === 'cancel') && (
         <div className="mb-5 flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <Info className="mt-0.5 h-4 w-4 shrink-0" />
@@ -164,7 +167,7 @@ export function Billing() {
               <span className="text-4xl font-black tracking-tight sm:text-5xl">{formatNumber(plan.priceKzt)} ₸</span>
               <span className="mb-1.5 text-sm font-semibold text-indigo-200">/ {t('billing.month')}</span>
             </div>
-            <p className="mt-1 text-xs text-indigo-200">{data.demo ? t('billing.priceNote') : t('billing.priceNoteReal')}</p>
+            <p className="mt-1 text-xs text-indigo-200">{demoReady ? t('billing.priceNote') : t('billing.priceNoteReal')}</p>
 
             <div className="mt-7">
               <p className="mb-3 text-xs font-bold uppercase tracking-[0.16em] text-indigo-200">{t('billing.featuresTitle')}</p>
@@ -184,13 +187,13 @@ export function Billing() {
                 size="md"
                 icon={<Sparkles className="h-4 w-4 text-indigo-600" />}
                 onClick={subscribe}
-                disabled={busy}
-                className="min-w-44 bg-white text-indigo-700 hover:bg-indigo-50"
+                disabled={busy || !paymentsAvailable}
+                className="min-w-44 bg-white text-indigo-700 hover:bg-indigo-50 disabled:opacity-60"
               >
                 {t('billing.subscribeNow')}
               </Button>
               <span className="text-xs text-indigo-200">{t('billing.renewNote')}</span>
-              {data.demo && (
+              {demoReady && (
                 <Link
                   to="/billing/payment-methods"
                   className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-white/10 px-4 text-sm font-semibold text-white ring-1 ring-inset ring-white/25 transition hover:bg-white/20"
@@ -259,7 +262,7 @@ export function Billing() {
         </div>
       </div>
 
-      {data.demo && (
+      {demoReady && (
         <Card className="mt-5">
           <SectionTitle title={t('billing.demoSimulationTitle')} subtitle={t('billing.demoSimulationSub')} />
           <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 px-5 py-4">
@@ -276,8 +279,8 @@ export function Billing() {
 
       <Card className="mt-5">
         <SectionTitle
-          title={data.demo ? t('billing.operationHistoryTitle') : t('billing.operationHistoryTitleReal')}
-          subtitle={data.demo ? t('billing.operationHistorySub') : t('billing.operationHistorySubReal')}
+          title={demoReady ? t('billing.operationHistoryTitle') : t('billing.operationHistoryTitleReal')}
+          subtitle={demoReady ? t('billing.operationHistorySub') : t('billing.operationHistorySubReal')}
         />
         <div className="border-t border-slate-100">
           {payments.length === 0 ? (

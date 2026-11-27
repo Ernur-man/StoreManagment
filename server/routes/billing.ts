@@ -2,13 +2,15 @@ import { Router } from '../lib/router.js';
 import { requireAuth } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
 import { checkoutSchema, demoCardSchema, demoConfirmSchema } from '../lib/validation.js';
+import type { PaymentProviderName } from '../lib/constants.js';
 import {
+  PAYMENTS_UNAVAILABLE_KEY,
   PaymentConfigurationError,
   PaymentProviderError,
   PaymentVerificationError,
-  configuredProvider,
-  isDemoAllowed,
+  paymentReadiness,
   verifyDemoTicket,
+  type PaymentReadiness,
 } from '../services/payments.js';
 import {
   cancelOwnSubscription,
@@ -39,9 +41,34 @@ function respondWithDemoCardError(res: HttpResponse, error: unknown): boolean {
   return false;
 }
 
+function respondWithPaymentUnavailable(res: HttpResponse, readiness: PaymentReadiness): void {
+  res.status(503).json({
+    error: 'PAYMENTS_UNAVAILABLE',
+    message: readiness.reasonKey ?? PAYMENTS_UNAVAILABLE_KEY,
+    reason: readiness.reasonCode,
+  });
+}
+
+/** Returns true when a demo-only endpoint must stop before doing any work. */
+function guardDemoEndpoint(res: HttpResponse, readiness: PaymentReadiness): boolean {
+  if (!readiness.available) {
+    respondWithPaymentUnavailable(res, readiness);
+    return true;
+  }
+  if (!readiness.demo) {
+    res.status(403).json({ error: 'DEMO_DISABLED', message: 'billing.errors.demoDisabled' });
+    return true;
+  }
+  return false;
+}
+
 function respondWithPaymentError(res: HttpResponse, error: unknown): boolean {
   if (error instanceof PaymentConfigurationError) {
-    res.status(503).json({ error: 'PAYMENT_NOT_CONFIGURED', message: 'billing.errors.notConfigured' });
+    res.status(503).json({
+      error: 'PAYMENTS_UNAVAILABLE',
+      message: error.reasonKey ?? PAYMENTS_UNAVAILABLE_KEY,
+      reason: error.reasonCode,
+    });
     return true;
   }
   if (error instanceof PaymentProviderError) {
@@ -57,8 +84,9 @@ function respondWithPaymentError(res: HttpResponse, error: unknown): boolean {
 
 router.get(
   '/plan',
-  asyncRoute(async (_req, res) => {
+  asyncRoute(async (req, res) => {
     const plan = await getPlan();
+    const readiness = paymentReadiness(req);
     const features = JSON.parse(plan.features) as string[];
     res.json({
       plan: {
@@ -72,8 +100,11 @@ router.get(
         durationDays: plan.durationDays,
         features,
       },
-      paymentProvider: configuredProvider(),
-      demoMode: configuredProvider() === 'demo' && isDemoAllowed(),
+      paymentProvider: readiness.provider,
+      demoMode: readiness.demo,
+      paymentsAvailable: readiness.available,
+      paymentUnavailableReason: readiness.reasonCode,
+      paymentUnavailableKey: readiness.reasonKey,
     });
   }),
 );
@@ -81,7 +112,7 @@ router.get(
 router.get(
   '/subscription',
   asyncRoute(async (req, res) => {
-    res.json(await subscriptionResponse(req.authUser!));
+    res.json(await subscriptionResponse(req.authUser!, req));
   }),
 );
 
@@ -90,10 +121,7 @@ router.get(
 router.get(
   '/card',
   asyncRoute(async (req, res) => {
-    if (!isDemoAllowed()) {
-      res.status(403).json({ error: 'DEMO_DISABLED', message: 'billing.errors.demoDisabled' });
-      return;
-    }
+    if (guardDemoEndpoint(res, paymentReadiness(req))) return;
     res.json({ card: await getDemoCard(req.authUser!), demo: true });
   }),
 );
@@ -101,10 +129,7 @@ router.get(
 router.post(
   '/card',
   asyncRoute(async (req, res) => {
-    if (!isDemoAllowed()) {
-      res.status(403).json({ error: 'DEMO_DISABLED', message: 'billing.errors.demoDisabled' });
-      return;
-    }
+    if (guardDemoEndpoint(res, paymentReadiness(req))) return;
     const input = demoCardSchema.parse(req.body ?? {});
     try {
       const card = await saveDemoCard(req.authUser!, input);
@@ -118,10 +143,7 @@ router.post(
 router.delete(
   '/card',
   asyncRoute(async (req, res) => {
-    if (!isDemoAllowed()) {
-      res.status(403).json({ error: 'DEMO_DISABLED', message: 'billing.errors.demoDisabled' });
-      return;
-    }
+    if (guardDemoEndpoint(res, paymentReadiness(req))) return;
     await deleteDemoCard(req.authUser!);
     res.json({ card: null, demo: true });
   }),
@@ -131,13 +153,14 @@ router.post(
   '/checkout',
   asyncRoute(async (req, res) => {
     const input = checkoutSchema.parse(req.body ?? {});
-    const selected = configuredProvider();
-    if (input.provider && input.provider !== selected) {
-      res.status(403).json({ error: 'PROVIDER_DISABLED', message: 'billing.errors.providerMismatch' });
+    const readiness = paymentReadiness(req);
+    if (!readiness.available) {
+      respondWithPaymentUnavailable(res, readiness);
       return;
     }
-    if (selected === 'demo' && !isDemoAllowed()) {
-      res.status(403).json({ error: 'DEMO_DISABLED', message: 'billing.errors.demoDisabled' });
+    const selected = readiness.provider as PaymentProviderName;
+    if (input.provider && input.provider !== selected) {
+      res.status(403).json({ error: 'PROVIDER_DISABLED', message: 'billing.errors.providerMismatch' });
       return;
     }
     try {
@@ -160,10 +183,7 @@ router.post(
 router.post(
   '/demo/confirm',
   asyncRoute(async (req, res) => {
-    if (!isDemoAllowed()) {
-      res.status(403).json({ error: 'DEMO_DISABLED', message: 'billing.errors.demoDisabled' });
-      return;
-    }
+    if (guardDemoEndpoint(res, paymentReadiness(req))) return;
     const { token, outcome } = demoConfirmSchema.parse(req.body);
     const ticket = verifyDemoTicket(token);
     if (!ticket) {
@@ -172,7 +192,7 @@ router.post(
     }
     try {
       const { result } = await confirmDemoPayment(req.authUser!, ticket, outcome);
-      res.json({ result, subscription: await subscriptionResponse(req.authUser!) });
+      res.json({ result, subscription: await subscriptionResponse(req.authUser!, req) });
     } catch (error) {
       if (!respondWithPaymentError(res, error)) throw error;
     }

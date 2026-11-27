@@ -8,6 +8,24 @@ export const ARRIVAL_EMAIL_SUBJECT = 'Your requested product has arrived! 🎉';
 export type ArrivalEmailStatus = 'PENDING' | 'SENT' | 'FAILED';
 export type ArrivalEmailLanguage = 'en' | 'ru';
 
+/**
+ * Names only — never values. Stored on PENDING rows so operators can see why
+ * no provider call was made, without turning an arrival into a failure.
+ */
+export const RESEND_CONFIG_ERROR =
+  'RESEND_NOT_CONFIGURED: RESEND_API_KEY or RESEND_FROM_EMAIL is missing or invalid';
+
+export type ArrivalEmailDispatchOutcome =
+  | 'SENT'
+  | 'FAILED'
+  | 'SKIPPED_NOT_CONFIGURED'
+  | 'SKIPPED_CLAIM';
+
+export interface ArrivalEmailDispatchResult {
+  outcome: ArrivalEmailDispatchOutcome;
+  notification: ArrivalEmailSnapshot | null;
+}
+
 interface ResendConfig {
   apiKey: string;
   fromEmail: string;
@@ -242,10 +260,20 @@ export async function queueArrivalEmailNotifications(
   return rows.map((row) => row.id);
 }
 
-async function dispatchOne(id: string, allowedStatuses: ArrivalEmailStatus[]): Promise<ArrivalEmailSnapshot | null> {
+async function dispatchOne(
+  id: string,
+  allowedStatuses: ArrivalEmailStatus[],
+): Promise<ArrivalEmailDispatchResult> {
   const config = readConfig();
-  // Missing/invalid configuration is a no-op: rows stay PENDING for a later retry.
-  if (!config) return null;
+  // Missing/invalid configuration is not a provider attempt. Keep the row
+  // PENDING, but persist a names-only diagnostic so the failure is not silent.
+  if (!config) {
+    await prisma.arrivalEmailNotification.updateMany({
+      where: { id, status: { in: allowedStatuses } },
+      data: { error: RESEND_CONFIG_ERROR },
+    });
+    return { outcome: 'SKIPPED_NOT_CONFIGURED', notification: null };
+  }
 
   const claimed = await prisma.arrivalEmailNotification.updateMany({
     where: { id, status: { in: allowedStatuses } },
@@ -256,10 +284,10 @@ async function dispatchOne(id: string, allowedStatuses: ArrivalEmailStatus[]): P
       lastAttemptAt: new Date(),
     },
   });
-  if (claimed.count === 0) return null;
+  if (claimed.count === 0) return { outcome: 'SKIPPED_CLAIM', notification: null };
 
   const notification = await prisma.arrivalEmailNotification.findUnique({ where: { id } });
-  if (!notification) return null;
+  if (!notification) return { outcome: 'SKIPPED_CLAIM', notification: null };
 
   try {
     const resend = new Resend(config.apiKey);
@@ -282,25 +310,36 @@ async function dispatchOne(id: string, allowedStatuses: ArrivalEmailStatus[]): P
         where: { id },
         data: { status: 'FAILED', error: safeError(result.error) },
       });
-      return updated as ArrivalEmailSnapshot;
+      return { outcome: 'FAILED', notification: updated as ArrivalEmailSnapshot };
+    }
+
+    // A 2xx response without a message ID is not proof of acceptance. Never
+    // mark SENT without it.
+    const messageId = result.data?.id;
+    if (typeof messageId !== 'string' || messageId.trim().length === 0) {
+      const updated = await prisma.arrivalEmailNotification.update({
+        where: { id },
+        data: { status: 'FAILED', error: 'RESEND_ACCEPTANCE_UNCONFIRMED: provider returned no message id' },
+      });
+      return { outcome: 'FAILED', notification: updated as ArrivalEmailSnapshot };
     }
 
     const updated = await prisma.arrivalEmailNotification.update({
       where: { id },
       data: {
         status: 'SENT',
-        providerMessageId: result.data?.id ?? null,
+        providerMessageId: messageId,
         error: null,
         sentAt: new Date(),
       },
     });
-    return updated as ArrivalEmailSnapshot;
+    return { outcome: 'SENT', notification: updated as ArrivalEmailSnapshot };
   } catch (error) {
     const updated = await prisma.arrivalEmailNotification.update({
       where: { id },
       data: { status: 'FAILED', error: safeError(error) },
     });
-    return updated as ArrivalEmailSnapshot;
+    return { outcome: 'FAILED', notification: updated as ArrivalEmailSnapshot };
   }
 }
 
@@ -313,7 +352,11 @@ export async function dispatchArrivalEmails(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   for (const id of ids) {
     try {
-      await dispatchOne(id, ['PENDING']);
+      const result = await dispatchOne(id, ['PENDING']);
+      if (result.outcome === 'SKIPPED_NOT_CONFIGURED') {
+        // Variable names only; never values.
+        console.warn('[WishStock] arrival email skipped: RESEND_API_KEY or RESEND_FROM_EMAIL is not configured');
+      }
     } catch (error) {
       console.error('[WishStock] arrival email dispatch failed', safeError(error));
     }
@@ -321,7 +364,7 @@ export async function dispatchArrivalEmails(ids: string[]): Promise<void> {
 }
 
 export interface RetryResult {
-  status: 'RETRIED' | 'NOT_FOUND' | 'TERMINAL';
+  status: 'RETRIED' | 'NOT_FOUND' | 'TERMINAL' | 'UNAVAILABLE';
   notification: ArrivalEmailSnapshot | null;
 }
 
@@ -341,8 +384,14 @@ export async function retryArrivalEmailNotification(id: string, storeId: string)
     });
     return { status: existing ? 'TERMINAL' : 'NOT_FOUND', notification: null };
   }
-  const notification = await dispatchOne(id, ['PENDING']);
-  return { status: 'RETRIED', notification };
+  const result = await dispatchOne(id, ['PENDING']);
+  if (result.outcome === 'SKIPPED_NOT_CONFIGURED') {
+    return { status: 'UNAVAILABLE', notification: null };
+  }
+  if (result.outcome === 'SKIPPED_CLAIM') {
+    return { status: 'TERMINAL', notification: null };
+  }
+  return { status: 'RETRIED', notification: result.notification };
 }
 
 export async function listArrivalEmailNotifications(storeId: string) {

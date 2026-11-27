@@ -2,7 +2,7 @@ import { Router } from '../lib/router.js';
 import { prisma } from '../lib/prisma.js';
 import { requireAuth, requirePermission } from '../lib/auth.js';
 import { asyncRoute } from '../lib/http.js';
-import { normalizeRequestEmail, requestSchema, requestStatusSchema } from '../lib/validation.js';
+import { normalizeRequestEmail, requestPatchSchema, requestSchema, requestStatusSchema } from '../lib/validation.js';
 import { normalize, normalizePhone } from '../lib/normalize.js';
 import { generateNumber, writeAudit } from '../lib/audit.js';
 import { REQUEST_STATUSES, type RequestStatus } from '../lib/constants.js';
@@ -195,36 +195,37 @@ router.patch(
   '/:id',
   requirePermission('requests:write'),
   asyncRoute(async (req, res) => {
-    const data = requestSchema.parse(req.body);
+    const data = requestPatchSchema.parse(req.body);
     const user = req.authUser!;
     const existing = await prisma.customerRequest.findFirst({
       where: { id: req.params.id, storeId: user.storeId },
+      include: { customer: true },
     });
     if (!existing) {
       res.status(404).json({ message: 'errors.notFound' });
       return;
     }
-    const customer = await findOrCreateCustomer(user.storeId, data.customerName, data.phone);
-    const variant = await resolveVariant(
-      user.storeId,
-      data.sku,
-      data.size,
-      data.color,
-      data.productName,
-    );
+    const customerName = data.customerName ?? existing.customer.name;
+    const phone = data.phone ?? existing.customer.phone;
+    const productName = data.productName ?? existing.productName;
+    const sku = data.sku ?? existing.sku;
+    const size = data.size ?? existing.size;
+    const color = data.color ?? existing.color;
+    const customer = await findOrCreateCustomer(user.storeId, customerName, phone);
+    const variant = await resolveVariant(user.storeId, sku, size, color, productName);
     const request = await prisma.customerRequest.update({
       where: { id: existing.id },
       data: {
         customerId: customer.id,
         productId: variant.productId,
         variantId: variant.id,
-        productName: data.productName,
-        sku: data.sku,
-        category: data.category || variant.product.category,
-        size: data.size,
-        color: data.color,
-        source: data.source,
-        notes: data.notes || null,
+        productName,
+        sku,
+        category: data.category === undefined ? existing.category : data.category || variant.product.category,
+        size,
+        color,
+        source: data.source ?? existing.source,
+        notes: data.notes === undefined ? existing.notes : data.notes || null,
         email: data.email === undefined ? existing.email : normalizeRequestEmail(data.email),
         emailLanguage: data.emailLanguage ?? existing.emailLanguage ?? 'en',
         requestDate: data.requestDate ?? existing.requestDate,
